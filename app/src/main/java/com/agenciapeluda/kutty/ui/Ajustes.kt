@@ -78,6 +78,7 @@ fun AjustesScreen() {
         while (true) {
             Inputs.tick(); dvs = Inputs.dvsState.copyOf()
             lat = (Engine.nLatency() / Engine.sampleRate * 1000).toFloat()
+            Inputs.refreshOutInfo()
             delay(120)
         }
     }
@@ -145,6 +146,12 @@ fun AjustesScreen() {
         }
 
         H2("Controladora MIDI")
+        SRow("Monitor MIDI", if (Inputs.midiLog.isEmpty()) "Mové el jog o el crossfader: acá aparece lo que llega" else "Lo último que mandó la controladora") {
+            Column(Modifier.fillMaxWidth().clip(R12).background(C.dark).padding(10.dp)) {
+                if (Inputs.midiLog.isEmpty()) Text("Nada todavía", style = T.small.copy(color = C.dim))
+                Inputs.midiLog.forEach { Text(it, style = T.small.copy(fontFamily = Mono, color = C.text2)) }
+            }
+        }
         SRow("Conectadas", if (Inputs.midiDevices.isEmpty()) "Ninguna. La REV1 y la Mixtour se reconocen solas" else Inputs.midiDevices.joinToString(" · ")) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Btn(if (Inputs.learning == "jog") "Girá el jog…" else if (s.learnJog.isNotEmpty()) "Jog aprendido" else "Aprender jog", kind = "ghost", small = true) { Inputs.learning = "jog" }

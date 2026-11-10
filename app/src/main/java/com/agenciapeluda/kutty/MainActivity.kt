@@ -33,7 +33,7 @@ class MainActivity : ComponentActivity() {
         preferHighRefresh()
         CrashLog.install(this)
         Store.init(this)
-        Engine.start(Inputs.preferredOutput(this))
+        Inputs.preferredOutput(this).let { (id, ch) -> Engine.start(id, ch) }
         Engine.nSetVolumes(Store.set.beatVol, Store.set.scratchVol)
         Inputs.hasMicPermission = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
         Perms.requestMic = { micLauncher.launch(Manifest.permission.RECORD_AUDIO) }

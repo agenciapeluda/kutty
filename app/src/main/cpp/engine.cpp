@@ -84,6 +84,10 @@ public:
     std::shared_ptr<oboe::AudioStream> out, in;
     std::mutex outMx;
     int outDevice = 0;
+    int outWantCh = 2;
+    std::atomic<int> outCh{2};
+    std::atomic<int> outActualDev{0};
+    std::atomic<int> outExclusive{0};
     int64_t outBase = 0;
     int sr = 48000;
     int inDevice = 0;
@@ -140,15 +144,23 @@ public:
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
             ->setSharingMode(oboe::SharingMode::Exclusive)
             ->setFormat(oboe::AudioFormat::Float)
-            ->setChannelCount(2)
-            ->setUsage(oboe::Usage::Game)
+            ->setChannelCount(outDevice > 0 ? outWantCh : 2)
+            ->setChannelConversionAllowed(true)
+            ->setFormatConversionAllowed(true)
+            ->setUsage(oboe::Usage::Media)
             ->setDataCallback(this)
             ->setErrorCallback(this);
         if (outDevice > 0) b.setDeviceId(outDevice);
         if (sr > 0 && written.load() > 0) b.setSampleRate(sr)->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
         auto r = b.openStream(out);
-        if (r != oboe::Result::OK && outDevice > 0) { b.setDeviceId(oboe::kUnspecified); r = b.openStream(out); }
-        if (r != oboe::Result::OK) { LOG("openOut %s", oboe::convertToText(r)); out.reset(); return false; }
+        // la placa USB puede no aceptar modo exclusivo o esa cantidad de canales: se prueba más suelto
+        if (r != oboe::Result::OK && outDevice > 0) { b.setSharingMode(oboe::SharingMode::Shared); r = b.openStream(out); }
+        if (r != oboe::Result::OK && outDevice > 0) { b.setChannelCount(2); r = b.openStream(out); }
+        if (r != oboe::Result::OK && outDevice > 0) { b.setPerformanceMode(oboe::PerformanceMode::None); r = b.openStream(out); }
+        if (r != oboe::Result::OK) { LOG("openOut %s", oboe::convertToText(r)); out.reset(); outActualDev.store(-1); return false; }
+        outCh.store(out->getChannelCount());
+        outActualDev.store(out->getDeviceId());
+        outExclusive.store(out->getSharingMode() == oboe::SharingMode::Exclusive ? 1 : 0);
         if (written.load() == 0) sr = out->getSampleRate();
         outBase = written.load();
         out->setBufferSizeInFrames(out->getFramesPerBurst() * 2);
@@ -189,7 +201,7 @@ public:
     }
 
     oboe::DataCallbackResult onAudioReady(oboe::AudioStream* s, void* data, int32_t n) override {
-        if (s == out.get()) renderOut((float*)data, n);
+        if (s->getDirection() == oboe::Direction::Output) renderOut((float*)data, n, s->getChannelCount());
         else decodeIn((const float*)data, n, s->getChannelCount());
         return oboe::DataCallbackResult::Continue;
     }
@@ -260,7 +272,7 @@ public:
         return b->data[k] + (b->data[k + 1] - b->data[k]) * fr;
     }
 
-    void renderOut(float* o, int n) {
+    void renderOut(float* o, int n, int oc) {
         const int64_t f0 = written.load(std::memory_order_relaxed);
         popCmds(f0);
         Buf* smp = sample.load(std::memory_order_acquire);
@@ -314,7 +326,9 @@ public:
             float L = bl * bv + m, R = br * bv + m;
             if (L > 1.f) L = 1.f; else if (L < -1.f) L = -1.f;
             if (R > 1.f) R = 1.f; else if (R < -1.f) R = -1.f;
-            o[i * 2] = L; o[i * 2 + 1] = R;
+            float* fr = o + (size_t)i * oc;
+            if (oc == 1) fr[0] = 0.5f * (L + R);
+            else { fr[0] = L; fr[1] = R; for (int c = 2; c < oc; c++) fr[c] = (c & 1) ? R : L; }  // salida 3-4 (auriculares) = master
             if (++capCount >= 32) {
                 capCount = 0;
                 uint64_t h = capHead.load(std::memory_order_relaxed);
@@ -357,16 +371,21 @@ static Engine* E = nullptr;
 #define JF(name) Java_com_agenciapeluda_kutty_audio_Engine_##name
 
 extern "C" {
-JNIEXPORT jint JNICALL JF(nStart)(JNIEnv*, jobject, jint deviceId) {
+JNIEXPORT jint JNICALL JF(nStart)(JNIEnv*, jobject, jint deviceId, jint ch) {
     if (!E) E = new Engine();
-    E->outDevice = deviceId;
+    E->outDevice = deviceId; E->outWantCh = ch > 0 ? ch : 2;
     if (!E->out) E->openOut();
     return E->sr;
 }
-JNIEXPORT void JNICALL JF(nSetOutput)(JNIEnv*, jobject, jint deviceId) {
-    if (!E || (E->outDevice == deviceId && E->out)) return;
-    E->outDevice = deviceId;
+JNIEXPORT void JNICALL JF(nSetOutput)(JNIEnv*, jobject, jint deviceId, jint ch) {
+    if (!E) return;
+    if (E->outDevice == deviceId && E->out && E->outActualDev.load() == deviceId) return;
+    E->outDevice = deviceId; E->outWantCh = ch > 0 ? ch : 2;
     E->openOut();
+}
+JNIEXPORT void JNICALL JF(nOutInfo)(JNIEnv* env, jobject, jintArray arr) {
+    jint v[4] = {E ? E->outActualDev.load() : -1, E ? E->outCh.load() : 0, E ? E->sr : 0, E ? E->outExclusive.load() : 0};
+    env->SetIntArrayRegion(arr, 0, 4, v);
 }
 JNIEXPORT void JNICALL JF(nSetSample)(JNIEnv* env, jobject, jfloatArray arr) {
     auto* b = new Buf(); b->channels = 1;
