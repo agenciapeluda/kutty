@@ -18,7 +18,7 @@ android {
         versionCode = buildNumber
         versionName = "0.1.$buildNumber"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
-        externalNativeBuild { cmake { cppFlags += listOf("-std=c++17", "-O3", "-ffast-math") } }
+        externalNativeBuild { cmake { cppFlags += listOf("-std=c++17", "-O3", "-ffast-math"); arguments += listOf("-DANDROID_STL=c++_shared") } }
     }
 
     signingConfigs {
