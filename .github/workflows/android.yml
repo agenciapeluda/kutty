@@ -1,5 +1,5 @@
 # Compila el APK de Kutty en cada push a main y lo publica como release
-# ("Kutty 0.1.N"), para bajarlo directo desde el teléfono.
+# ("Kutty 0.2.N"), para bajarlo directo desde el teléfono.
 name: Android APK
 
 on:
@@ -40,7 +40,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          V="0.1.${{ github.run_number }}"
+          V="0.2.${{ github.run_number }}"
           cp app/build/outputs/apk/release/app-release.apk "kutty-$V.apk"
           gh release create "v$V" "kutty-$V.apk" --title "Kutty $V" --notes "Build ${{ github.sha }}" --target "${{ github.sha }}"
 
