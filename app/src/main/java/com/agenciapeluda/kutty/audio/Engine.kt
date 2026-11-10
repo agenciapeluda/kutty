@@ -9,8 +9,8 @@ object Engine {
     var started = false
         private set
 
-    fun start(): Int {
-        if (!started) { sampleRate = nStart(); started = true }
+    fun start(outDevice: Int = 0): Int {
+        if (!started) { sampleRate = nStart(outDevice); started = true }
         return sampleRate
     }
 
@@ -18,7 +18,8 @@ object Engine {
     fun setTarget(posSec: Double, velSec: Double) = synchronized(lock) { nSetTarget(posSec, velSec) }
     fun setFader(open: Boolean) = nSetFader(if (open) 1f else 0f)
 
-    external fun nStart(): Int
+    external fun nStart(deviceId: Int): Int
+    external fun nSetOutput(deviceId: Int)
     external fun nSetSample(data: FloatArray)
     external fun nSetBeat(interleaved: FloatArray)
     external fun nSetTarget(t: Double, v: Double)

@@ -82,6 +82,9 @@ public:
 
     // ---- estado del hilo de audio ----
     std::shared_ptr<oboe::AudioStream> out, in;
+    std::mutex outMx;
+    int outDevice = 0;
+    int64_t outBase = 0;
     int sr = 48000;
     int inDevice = 0;
     std::atomic<int64_t> written{0};
@@ -130,6 +133,8 @@ public:
 
     // ---- salida ----
     bool openOut() {
+        std::lock_guard<std::mutex> lk(outMx);
+        if (out) { out->stop(); out->close(); out.reset(); }
         oboe::AudioStreamBuilder b;
         b.setDirection(oboe::Direction::Output)
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
@@ -139,16 +144,20 @@ public:
             ->setUsage(oboe::Usage::Game)
             ->setDataCallback(this)
             ->setErrorCallback(this);
+        if (outDevice > 0) b.setDeviceId(outDevice);
+        if (sr > 0 && written.load() > 0) b.setSampleRate(sr)->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium);
         auto r = b.openStream(out);
-        if (r != oboe::Result::OK) { LOG("openOut %s", oboe::convertToText(r)); return false; }
-        sr = out->getSampleRate();
+        if (r != oboe::Result::OK && outDevice > 0) { b.setDeviceId(oboe::kUnspecified); r = b.openStream(out); }
+        if (r != oboe::Result::OK) { LOG("openOut %s", oboe::convertToText(r)); out.reset(); return false; }
+        if (written.load() == 0) sr = out->getSampleRate();
+        outBase = written.load();
         out->setBufferSizeInFrames(out->getFramesPerBurst() * 2);
         out->requestStart();
         LOG("salida %d Hz burst %d", sr, out->getFramesPerBurst());
         return true;
     }
     void onErrorAfterClose(oboe::AudioStream* s, oboe::Result) override {
-        if (s == out.get()) { openOut(); }
+        if (s == out.get() || !out) { openOut(); }
         else if (in && s == in.get()) { in.reset(); openIn(inDevice); }
     }
 
@@ -317,18 +326,29 @@ public:
     }
 
     // cuadro que se está escuchando ahora
+    double lastHeard = 0;
     double heardFrame() {
-        if (!out) return 0;
+        std::unique_lock<std::mutex> lk(outMx, std::try_to_lock);
+        if (!lk.owns_lock() || !out) return lastHeard;
         auto ts = out->getTimestamp(CLOCK_MONOTONIC);
-        if (ts) {
-            return (double)ts.value().position + (double)(nowNs() - ts.value().timestamp) * sr / 1e9;
-        }
-        return (double)written.load() - latencyFrames();
+        double h;
+        if (ts && ts.value().position > 0) h = (double)outBase + (double)ts.value().position + (double)(nowNs() - ts.value().timestamp) * sr / 1e9;
+        else h = (double)written.load() - latencyUnlocked();
+        // nunca para atrás ni por delante de lo escrito
+        if (h > (double)written.load()) h = (double)written.load();
+        if (h < lastHeard - sr * 0.05) h = lastHeard;
+        lastHeard = h;
+        return h;
     }
-    double latencyFrames() {
+    double latencyUnlocked() {
         if (!out) return 0;
         auto l = out->calculateLatencyMillis();
         return l ? l.value() * sr / 1000.0 : out->getBufferSizeInFrames();
+    }
+    double latencyFrames() {
+        std::unique_lock<std::mutex> lk(outMx, std::try_to_lock);
+        if (!lk.owns_lock()) return 0;
+        return latencyUnlocked();
     }
 };
 
@@ -337,10 +357,16 @@ static Engine* E = nullptr;
 #define JF(name) Java_com_agenciapeluda_kutty_audio_Engine_##name
 
 extern "C" {
-JNIEXPORT jint JNICALL JF(nStart)(JNIEnv*, jobject) {
+JNIEXPORT jint JNICALL JF(nStart)(JNIEnv*, jobject, jint deviceId) {
     if (!E) E = new Engine();
+    E->outDevice = deviceId;
     if (!E->out) E->openOut();
     return E->sr;
+}
+JNIEXPORT void JNICALL JF(nSetOutput)(JNIEnv*, jobject, jint deviceId) {
+    if (!E || (E->outDevice == deviceId && E->out)) return;
+    E->outDevice = deviceId;
+    E->openOut();
 }
 JNIEXPORT void JNICALL JF(nSetSample)(JNIEnv* env, jobject, jfloatArray arr) {
     auto* b = new Buf(); b->channels = 1;

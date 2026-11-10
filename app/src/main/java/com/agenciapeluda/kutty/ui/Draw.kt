@@ -79,7 +79,7 @@ fun DrawScope.drawTtm(tm: TextMeasurer, o: TtmOpts, top: Float = 0f) {
     while (b <= o.b1) {
         val x = X(b); val bar = ((b.toInt() % 4) + 4) % 4 == 0
         drawLine(if (bar) C.tick else C.divider, Offset(x, top + padT - 6), Offset(x, top + H - padB + 4), 1f)
-        if (o.grid && bar && b >= 0) drawText(tm, (b.toInt() / 4 + 1).toString(), Offset(x + 4 * density, top + 3 * density), label)
+        if (o.grid && bar && b >= 0 && x >= 0f && x + 24 * density < W) drawText(tm, (b.toInt() / 4 + 1).toString(), Offset(x + 4 * density, top + 3 * density), label)
         b += 1.0
     }
     for (p in listOf(0.0, 1.0)) drawLine(C.divider, Offset(0f, Y(p)), Offset(W, Y(p)), 1f, pathEffect = dashGrid)
@@ -124,7 +124,9 @@ fun DrawScope.drawTtm(tm: TextMeasurer, o: TtmOpts, top: Float = 0f) {
             if (age > 1 || f.b < o.b0) continue
             val st = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, color = C.grade[f.grade].copy(alpha = 1 - age))
             val r = tm.measure(C.gradeName[f.grade], st)
-            drawText(r, topLeft = Offset(X(f.b) - r.size.width / 2, top + H - padB - r.size.height - age * 10 * density))
+            val tx = (X(f.b) - r.size.width / 2).coerceIn(0f, max(0f, W - r.size.width))
+            val ty = (top + H - padB - r.size.height - age * 10 * density).coerceAtLeast(0f)
+            if (tx + r.size.width <= W) drawText(r, topLeft = Offset(tx, ty))
         }
     }
 }
@@ -143,7 +145,7 @@ fun DrawScope.drawScratchStrip(tm: TextMeasurer, pk: Peaks, cue: Double, p: Doub
     val xc = (nowX + (cue - cur) * pxs).toFloat()
     drawRect(C.cue, Offset(xc - density, 0f), Size(2 * density, h))
     drawRect(Color.White, Offset(nowX - density, 0f), Size(2 * density, h))
-    drawText(tm, "SONIDO · " + name.uppercase(), Offset(8 * density, 4 * density), TextStyle(fontFamily = Mono, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, color = C.dim))
+    if (size.width > 120 * density && size.height > 16 * density) drawText(tm, "SONIDO · " + name.uppercase(), Offset(8 * density, 4 * density), TextStyle(fontFamily = Mono, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, color = C.dim), maxLines = 1, size = androidx.compose.ui.geometry.Size(size.width - 16 * density, 14 * density))
     drawLine(C.divider, Offset(0f, h - 1), Offset(W, h - 1), 1f)
 }
 

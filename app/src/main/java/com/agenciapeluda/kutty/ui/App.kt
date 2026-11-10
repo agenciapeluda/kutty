@@ -47,6 +47,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.agenciapeluda.kutty.CrashLog
 import com.agenciapeluda.kutty.core.Session
 import com.agenciapeluda.kutty.core.Tech
 import com.agenciapeluda.kutty.core.Techniques
@@ -106,6 +107,7 @@ fun App() {
             Nav.soundEditor?.let { SoundEditor(it) }
             Nav.trackEditor?.let { TrackEditor(it) }
             Toast()
+            CrashLog.report?.let { CrashReport(it) }
         }
     }
 }
@@ -344,5 +346,23 @@ private fun Toast() {
     androidx.compose.runtime.LaunchedEffect(msg) { kotlinx.coroutines.delay(1800); if (Nav.toast == msg) Nav.toast = null }
     Box(Modifier.fillMaxSize().navigationBarsPadding().padding(bottom = 84.dp), contentAlignment = Alignment.BottomCenter) {
         Box(Modifier.clip(R12).background(C.raised).padding(horizontal = 16.dp, vertical = 10.dp)) { Text(msg, style = T.small.copy(color = C.text)) }
+    }
+}
+
+@Composable
+private fun CrashReport(text: String) {
+    val clip = androidx.compose.ui.platform.LocalClipboardManager.current
+    Box(Modifier.fillMaxSize().background(C.bg.copy(alpha = 0.85f)).clickable(enabled = false) {}, contentAlignment = Alignment.Center) {
+        Column(Modifier.padding(20.dp).clip(RoundedCornerShape(18.dp)).background(C.panel).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("La app se cerró la última vez", style = T.h2.copy(color = C.text))
+            Text("Copiá el detalle y pasáselo a quien la está armando.", style = T.body.copy(color = C.text2))
+            Box(Modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(10.dp)).background(C.dark).verticalScroll(rememberScrollState()).padding(10.dp)) {
+                Text(text, style = T.body.copy(fontFamily = Mono, fontSize = 11.sp, color = C.text2))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Btn("Copiar", kind = "ghost") { clip.setText(androidx.compose.ui.text.AnnotatedString(text)); Nav.toast = "Copiado" }
+                Btn("Cerrar") { CrashLog.dismiss() }
+            }
+        }
     }
 }

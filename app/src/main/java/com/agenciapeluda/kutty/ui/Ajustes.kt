@@ -93,6 +93,20 @@ fun AjustesScreen() {
             Seg(listOf("auto" to "Auto", "dvs" to "Corte", "midi" to "MIDI", "touch" to "Pantalla"), s.faderSrc) { s.faderSrc = it; saveIt() }
         }
 
+        H2("Salida de audio")
+        SRow("Por dónde suena", "En uso: ${Inputs.outActive}. En Auto, si conectás la REV1 o una placa USB, suena por ahí") {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                (listOf(0 to "Auto", -1 to "Teléfono") + Inputs.audioOutputs.map { it.id to it.name }).forEach { (id, name) ->
+                    Row(Modifier.fillMaxWidth().clip(R12).background(C.dark).border(1.dp, if (s.outDevice == id) C.accent else C.divider, R12).clickable {
+                        s.outDevice = id; Store.save(); Inputs.applyOutput()
+                    }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(14.dp).clip(CircleShape).background(if (s.outDevice == id) C.accentText else C.tick))
+                        Spacer(Modifier.width(10.dp)); Text(name, style = T.body)
+                    }
+                }
+            }
+        }
+
         H2("DVS (vinilo de timecode)")
         SRow("Placa de audio", if (Inputs.audioInputs.isEmpty()) "Conectá una placa USB con entrada estéreo" else "Entrada donde llega el plato") {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {

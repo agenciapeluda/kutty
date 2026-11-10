@@ -56,6 +56,9 @@ object Inputs {
 
     // DVS
     val audioInputs = mutableStateListOf<AudioInput>()
+    val audioOutputs = mutableStateListOf<AudioInput>()
+    var outActive by mutableStateOf("Teléfono")
+    private var outId = Int.MIN_VALUE
     var dvsOpen by mutableStateOf(false)
     val dvsState = FloatArray(5)  // velocidad, nivel, señal, calidad, abierta
     @Volatile private var lastSignal = 0L
@@ -232,8 +235,36 @@ object Inputs {
     }
 
     // ---------- DVS ----------
+    private fun isUsb(d: AudioDeviceInfo) = d.type == AudioDeviceInfo.TYPE_USB_DEVICE || d.type == AudioDeviceInfo.TYPE_USB_HEADSET || d.type == AudioDeviceInfo.TYPE_USB_ACCESSORY
+    private var amRef: AudioManager? = null
+
+    /** Salida: la elegida en Ajustes o, en Auto, la primera USB (la REV1, una placa). */
+    fun applyOutput() {
+        val am = amRef ?: return
+        val usb = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { isUsb(it) }
+        audioOutputs.clear(); usb.forEach { audioOutputs.add(AudioInput(it.id, it.productName?.toString() ?: "USB")) }
+        val want = Store.set.outDevice
+        val dev = when {
+            want == -1 -> null
+            want > 0 -> usb.firstOrNull { it.id == want } ?: usb.firstOrNull()
+            else -> usb.firstOrNull()
+        }
+        val id = dev?.id ?: 0
+        outActive = dev?.productName?.toString() ?: "Teléfono"
+        if (id != outId) { outId = id; Engine.nSetOutput(id) }
+    }
+    fun preferredOutput(ctx: Context): Int {
+        val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        if (Store.set.outDevice == -1) return 0
+        val usb = am.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { isUsb(it) }
+        val id = (usb.firstOrNull { it.id == Store.set.outDevice } ?: usb.firstOrNull())?.id ?: 0
+        outId = id
+        return id
+    }
+
     fun initAudioInputs(ctx: Context) {
         val am = ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        amRef = am
         fun refresh() {
             audioInputs.clear()
             am.getDevices(AudioManager.GET_DEVICES_INPUTS)
@@ -241,9 +272,10 @@ object Inputs {
                 .forEach { audioInputs.add(AudioInput(it.id, (it.productName?.toString() ?: "USB") + " · " + it.channelCounts.maxOrNull().let { c -> if (c == null || c == 0) "estéreo" else "$c canales" })) }
         }
         refresh()
+        applyOutput()
         am.registerAudioDeviceCallback(object : AudioDeviceCallback() {
-            override fun onAudioDevicesAdded(a: Array<out AudioDeviceInfo>) { refresh(); reopenDvs() }
-            override fun onAudioDevicesRemoved(a: Array<out AudioDeviceInfo>) { refresh(); reopenDvs() }
+            override fun onAudioDevicesAdded(a: Array<out AudioDeviceInfo>) { refresh(); applyOutput(); reopenDvs() }
+            override fun onAudioDevicesRemoved(a: Array<out AudioDeviceInfo>) { refresh(); applyOutput(); reopenDvs() }
         }, Handler(Looper.getMainLooper()))
     }
 
