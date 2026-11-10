@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+
 package com.agenciapeluda.kutty.ui
 
 import androidx.compose.foundation.Canvas
@@ -72,16 +74,18 @@ fun PracticeScreen() {
     if (Session.tech == null) return
     Box(Modifier.fillMaxSize().background(C.bg).clickable(enabled = false) {}) {
         BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
-            val land = maxWidth > maxHeight
+            val mw = maxWidth
+            val mh = maxHeight
+            val land = mw > mh
             Column(Modifier.fillMaxSize()) {
                 TopBar(land)
                 Hud(land)
                 Stage(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), frame)
-                if (land) Row(Modifier.fillMaxWidth().height(maxHeight * 0.4f).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (land) Row(Modifier.fillMaxWidth().height(mh * 0.4f).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Disc(Modifier.fillMaxHeight().aspectRatio(1f), frame)
                     Fader(Modifier.weight(1f))
                 } else Column(Modifier.fillMaxWidth().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Disc(Modifier.width(min(maxWidth.value * 0.66f, maxHeight.value * 0.36f).dp).aspectRatio(1f), frame)
+                    Disc(Modifier.width(min(mw.value * 0.66f, mh.value * 0.36f).dp).aspectRatio(1f), frame)
                     Fader(Modifier.fillMaxWidth())
                 }
             }
