@@ -27,6 +27,8 @@ object Session {
 
     var tech by mutableStateOf<Tech?>(null)
     var mode by mutableStateOf("practicar")
+    var part by mutableStateOf("completo")   // completo | plato (la app hace el fader) | fader (la app mueve el disco)
+    var bpmNote by mutableStateOf<String?>(null)
     var bpm by mutableIntStateOf(85)
     var running by mutableStateOf(false)
     var ended by mutableStateOf(false)
@@ -127,6 +129,12 @@ object Session {
         nextGrade = 0; combo = 0; maxCombo = 0; pts = 0; ended = false; blocks = 0; result = null
         challengeBpm = bpm
         Inputs.resetDisc()
+        Inputs.autoFader = part == "plato" && !demo
+        Inputs.autoDisc = part == "fader" && !demo
+        Inputs.autoFaderOpen = false
+        Inputs.resolve()
+        Engine.nSetKeylock(Store.set.keylock)
+        bpmNote = null
         beatBase = beat.bpm
         val f0 = Engine.nWritten() + 0.2 * sr
         segs.clear(); segs.add(Seg(f0, -4.0, bpm.toDouble()))
@@ -141,8 +149,13 @@ object Session {
         running = false
         Engine.nStopBeat()
         Inputs.demo = false
+        releaseAuto()
         if (!silent) finish(true)
         segs.clear()
+    }
+
+    private fun releaseAuto() {
+        if (Inputs.autoFader || Inputs.autoDisc) { Inputs.autoFader = false; Inputs.autoDisc = false; Inputs.resolve(); Inputs.send() }
     }
 
     /** Un cuadro de pantalla. */
@@ -194,6 +207,16 @@ object Session {
         } else if (Inputs.demo) {
             Inputs.demo = false; Inputs.p = 0.0; Inputs.vel = 0.0; Inputs.resolve(); Inputs.send()
         }
+        // por partes: la app hace la otra mano, perfecta
+        if (!demoNow && (Inputs.autoFader || Inputs.autoDisc)) {
+            val r = if (schedB >= 0) Grading.refAt(timed, schedB) else null
+            if (Inputs.autoFader) { val o = r?.f == 1; if (o != Inputs.autoFaderOpen) { Inputs.autoFaderOpen = o; Engine.setFader(o) } }
+            if (Inputs.autoDisc) {
+                val p = r?.p ?: 0.0
+                Engine.nSetTarget(Inputs.cueSec() + p * UNIT, (r?.v ?: 0.0) * UNIT * bpmAt(schedB) / 60)
+                Inputs.p = p
+            }
+        }
         val heard = heardBeat
         val tolMs = TOL[if (mode == "aprender") "facil" else Store.set.diff] ?: 60
         val tolB = tolMs / 1000.0 * bpmAt(heard) / 60
@@ -202,7 +225,7 @@ object Session {
             val s = timed[nextGrade]
             if (heard < s.b1 + tolB + 0.08) break
             if (!s.demo) {
-                val g = Grading.grade(s, samples, tolB, 0.014 * bpmAt(s.b0) / 60)
+                val g = Grading.grade(s, samples, tolB, 0.014 * bpmAt(s.b0) / 60, if (demoOnly) "completo" else part)
                 s.g = g
                 graded.add(s)
                 if (g.grade <= Grade.GOOD) combo++ else combo = 0
@@ -238,6 +261,7 @@ object Session {
     private fun finish(aborted: Boolean) {
         if (running) { running = false; Engine.nStopBeat() }
         Inputs.demo = false
+        releaseAuto()
         ended = true
         val t = tech ?: return
         if (demoOnly || graded.isEmpty()) { ended = false; segs.clear(); return }
@@ -246,9 +270,16 @@ object Session {
         val dur = max(1, ((System.currentTimeMillis() - t0) / 1000).toInt())
         val rec = SessionRec(System.currentTimeMillis(), t.id, mode, if (mode == "desafio") challengeBpm else bpm, (acc * 100).roundToInt(), pts, dur, counts, maxCombo, aborted)
         Store.sessions.add(rec)
-        if (mode != "aprender" && !aborted) Store.best[t.id] = max(Store.best[t.id] ?: 0, rec.acc)
+        // la técnica se domina con las dos manos
+        if (mode != "aprender" && !aborted && part == "completo") Store.best[t.id] = max(Store.best[t.id] ?: 0, rec.acc)
         Store.save()
-        val fb = Grading.feedback(graded, samples, rec.bpm.toDouble(), acc, mode == "aprender")
+        val fb = ArrayList(Grading.feedback(graded, samples, rec.bpm.toDouble(), acc, mode == "aprender", part))
+        // BPM progresivo: si lo pasaste bien, la próxima va un poco más rápido
+        val s = Store.set
+        if (s.progressive && !aborted && mode == "practicar" && acc >= 0.85 && bpm < s.progMax) {
+            bpm = min(s.progMax, bpm + s.progStep); bpmNote = "Subió a $bpm BPM"
+            fb.add(0, 0 to "Pasaste el ejercicio: la próxima va a $bpm BPM.")
+        }
         result = Result(rec, fb, timed, total)
         hud()
     }

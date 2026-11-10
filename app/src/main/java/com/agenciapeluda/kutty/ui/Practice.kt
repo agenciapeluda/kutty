@@ -25,6 +25,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import com.agenciapeluda.kutty.audio.Engine
+import kotlin.math.roundToInt
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -92,6 +95,7 @@ fun PracticeScreen() {
         }
         if (!Store.audioReady) Box(Modifier.fillMaxSize().background(C.bg.copy(alpha = 0.8f)), contentAlignment = Alignment.Center) { Text("Preparando el audio…", style = T.bodyB) }
         Session.result?.let { Results(it) }
+        if (Nav.bpmSheet) BpmDialog()
     }
 }
 
@@ -107,7 +111,7 @@ private fun TopBar(land: Boolean) {
         Seg(listOf("aprender" to "Aprender", "practicar" to "Practicar", "desafio" to "Desafío"), Session.mode, Modifier.weight(1f, fill = !land), enabled = !run) { Session.mode = it }
         Row(Modifier.clip(R12).background(C.dark).border(1.dp, C.divider, R12).padding(3.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).clickable(enabled = !run) { Session.bpm = (Session.bpm - 2).coerceAtLeast(50) }, contentAlignment = Alignment.Center) { Text("−", style = T.body.copy(color = C.text2, fontSize = 18.sp)) }
-            Text("${if (run && Session.mode == "desafio") Session.challengeBpm else Session.bpm}", style = T.num.copy(fontSize = 16.sp), modifier = Modifier.widthIn(min = 40.dp))
+            Text("${if (run && Session.mode == "desafio") Session.challengeBpm else Session.bpm}", style = T.num.copy(fontSize = 16.sp), modifier = Modifier.widthIn(min = 40.dp).clickable(enabled = !run) { Nav.bpmSheet = true })
             Text("BPM", style = T.tiny.copy(fontSize = 10.sp))
             Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).clickable(enabled = !run) { Session.bpm = (Session.bpm + 2).coerceAtMost(160) }, contentAlignment = Alignment.Center) { Text("+", style = T.body.copy(color = C.text2, fontSize = 18.sp)) }
         }
@@ -132,7 +136,8 @@ private fun TopBar(land: Boolean) {
 private fun Hud(land: Boolean) {
     @Composable fun K(label: String, v: String) = Column { Text(label.uppercase(), style = T.tiny.copy(letterSpacing = 0.7.sp)); Text(v, style = T.num.copy(fontSize = 17.sp)) }
     val chips = @Composable {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Seg(listOf("completo" to "Completo", "plato" to "Solo plato", "fader" to "Solo fader"), Session.part, enabled = !Session.running) { Session.part = it }
             AChip(beatLabel(), C.accentText, !Session.running) { Nav.chooser = "beat" }
             AChip(Store.curSound()?.name ?: "Sonido", C.cue, !Session.running) { Nav.chooser = "sound" }
         }
@@ -144,7 +149,7 @@ private fun Hud(land: Boolean) {
             Spacer(Modifier.weight(1f))
             Text(Session.hudState, style = if (Session.hudCount) T.num.copy(fontSize = 28.sp) else T.bodyB.copy(fontSize = 14.sp, color = C.accentText), maxLines = 1)
         }
-        if (!land) { Spacer(Modifier.height(8.dp)); chips() }
+        if (!land) { Spacer(Modifier.height(8.dp)); Row(Modifier.horizontalScroll(rememberScrollState())) { chips() } }
     }
 }
 
@@ -221,43 +226,115 @@ private fun Disc(mod: Modifier, frame: Long) {
 
 @Composable
 private fun Fader(mod: Modifier) {
-    val pad = Store.set.faderMode == "pad"
+    val mode = Store.set.faderMode
+    val btn = mode != "slide"
+    val auto = Inputs.autoFader
     var tick by remember { mutableLongStateOf(0L) }
-    Column(mod, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Canvas(Modifier.fillMaxWidth().height(80.dp).clip(R14).background(C.panel).border(1.dp, C.border, R14).pointerInput(pad) {
+    Column(mod, verticalArrangement = Arrangement.spacedBy(8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        val touchable = !auto && Inputs.faderActive == "touch"
+        val gestures = Modifier.pointerInput(btn, touchable) {
+            if (!touchable) return@pointerInput
             awaitEachGesture {
                 val down = awaitFirstDown()
-                if (pad) Inputs.setPad(true) else Inputs.setFaderPos(down.position.x / size.width)
+                if (btn) Inputs.setPad(true) else Inputs.setFaderPos(down.position.x / size.width)
                 tick++
                 while (true) {
                     val ev = awaitPointerEvent()
                     val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
                     if (!ch.pressed) break
-                    if (!pad) { ch.historical.forEach { Inputs.setFaderPos(it.position.x / size.width) }; Inputs.setFaderPos(ch.position.x / size.width) }
+                    if (!btn) { ch.historical.forEach { Inputs.setFaderPos(it.position.x / size.width) }; Inputs.setFaderPos(ch.position.x / size.width) }
                     ch.consume(); tick++
                 }
-                if (pad) Inputs.setPad(false)
+                if (btn) Inputs.setPad(false)
                 tick++
             }
-        }) {
-            @Suppress("UNUSED_VARIABLE") val tk = tick
-            val open = Inputs.faderOpen()
-            if (pad) {
-                drawRect(if (open) C.accentDark else C.panel)
-                return@Canvas
+        }
+        if (btn && touchable) {
+            // botón redondo para el pulgar
+            Canvas(Modifier.size(96.dp).clip(CircleShape).then(gestures)) {
+                @Suppress("UNUSED_VARIABLE") val tk = tick
+                val open = Inputs.faderOpen()
+                drawCircle(if (open) C.accent else C.raised)
+                drawCircle(if (open) C.accentText else C.tick, style = androidx.compose.ui.graphics.drawscope.Stroke(3 * density))
+                drawCircle(if (open) Color.White else C.dim, radius = 6 * density)
             }
-            val y = size.height / 2
-            drawRoundRect(C.divider, Offset(14 * density, y - 2 * density), Size(size.width - 28 * density, 4 * density))
-            val cutX = (if (Store.set.hamster) 1 - Store.set.cutIn else Store.set.cutIn) * size.width
-            drawRect(C.tick, Offset(cutX - density, 18 * density), Size(2 * density, size.height - 36 * density))
-            val kx = Inputs.fv * size.width
-            drawRoundRect(if (open) C.accent else C.raised, Offset(kx - 15 * density, 12 * density), Size(30 * density, size.height - 24 * density), androidx.compose.ui.geometry.CornerRadius(8 * density))
+        } else {
+            Canvas(Modifier.fillMaxWidth().height(80.dp).clip(R14).background(C.panel).border(1.dp, C.border, R14).then(gestures)) {
+                @Suppress("UNUSED_VARIABLE") val tk = tick
+                @Suppress("UNUSED_VARIABLE") val fr = Session.heardBeat   // redibuja con cada cuadro (MIDI y automático)
+                val open = Inputs.faderOpen()
+                val y = size.height / 2
+                drawRoundRect(C.divider, Offset(14 * density, y - 2 * density), Size(size.width - 28 * density, 4 * density))
+                if (Inputs.faderActive == "touch" && !auto && !btn) {
+                    val cutX = (if (Store.set.hamster) 1 - Store.set.cutIn else Store.set.cutIn) * size.width
+                    drawRect(C.tick, Offset(cutX - density, 18 * density), Size(2 * density, size.height - 36 * density))
+                }
+                // el fader se mueve aunque lo toque la controladora o la app
+                val shown = Inputs.faderShown()
+                val kx = 15 * density + shown * (size.width - 30 * density)
+                drawRoundRect(if (open) C.accent else C.raised, Offset(kx - 15 * density, 12 * density), Size(30 * density, size.height - 24 * density), androidx.compose.ui.geometry.CornerRadius(8 * density))
+            }
         }
         val src = Inputs.faderActive
         Text(
-            when { src == "midi" -> "Fader de la controladora"; src == "dvs" -> "Fader: corte del timecode"; pad -> "Mantené para abrir el fader"; Store.set.hamster -> "abierto ← · → cerrado"; else -> "cerrado ← · → abierto" },
-            style = T.small.copy(color = C.dim), modifier = Modifier.align(Alignment.CenterHorizontally),
+            when {
+                auto -> "Fader automático: mirá cómo se mueve y seguilo con el disco"
+                src == "midi" -> "Fader de la controladora"
+                src == "dvs" -> "Fader: corte del timecode"
+                mode == "pad" -> "Mantené apretado para que suene"
+                mode == "cut" -> "Suena solo; cada toque es un click"
+                Store.set.hamster -> "abierto ← · → cerrado"
+                else -> "cerrado ← · → abierto"
+            },
+            style = T.small.copy(color = C.dim),
         )
+    }
+}
+
+@Composable
+private fun BpmDialog() {
+    val t = Session.tech ?: return
+    val beat = Store.curBeat()
+    val s = Store.set
+    val taps = remember { ArrayList<Long>() }
+    fun setB(v: Int) { Session.bpm = v.coerceIn(50, 160) }
+    androidx.compose.ui.window.Dialog(onDismissRequest = { Nav.bpmSheet = false }) {
+        Column(Modifier.clip(RoundedCornerShape(18.dp)).background(C.panel).border(1.dp, C.border, RoundedCornerShape(18.dp)).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Tempo del ejercicio", style = T.h1.copy(fontSize = 18.sp))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Btn("−1", kind = "ghost", small = true) { setB(Session.bpm - 1) }
+                Text("${Session.bpm}", style = T.num.copy(fontSize = 34.sp), modifier = Modifier.weight(1f))
+                Text("BPM", style = T.small)
+                Btn("+1", kind = "ghost", small = true) { setB(Session.bpm + 1) }
+            }
+            KSlider(Session.bpm.toFloat(), 50f..160f, "${Session.bpm}") { setB(it.roundToInt()) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Btn("Tap", Modifier.weight(1f), "ghost") {
+                    val now = System.currentTimeMillis()
+                    if (taps.isNotEmpty() && now - taps.last() > 2000) taps.clear()
+                    taps.add(now); while (taps.size > 6) taps.removeAt(0)
+                    if (taps.size >= 3) setB((60000.0 / ((taps.last() - taps.first()).toDouble() / (taps.size - 1))).roundToInt())
+                }
+                Btn("Técnica · ${t.bpm}", Modifier.weight(1f), "ghost") { setB(t.bpm) }
+            }
+            if (beat != null && !beat.builtin) Btn("A tempo de la pista · ${Math.round(beat.bpm)}", Modifier.fillMaxWidth(), "ghost") { setB(Math.round(beat.bpm).toInt()) }
+            Text("Práctica lenta", style = T.h2)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val base = if (beat != null && !beat.builtin) Math.round(beat.bpm).toInt() else t.bpm
+                listOf(100, 75, 50).forEach { pc -> Btn("$pc %", Modifier.weight(1f), "ghost", small = true) { setB(base * pc / 100) } }
+            }
+            Text("Progresivo", style = T.h2)
+            Text("Cada vez que pasás el ejercicio con 85 % o más en Practicar, sube solo.", style = T.small)
+            Seg(listOf(false to "Apagado", true to "Prendido"), s.progressive) { s.progressive = it; Store.save() }
+            if (s.progressive) {
+                Text("Sube de a ${s.progStep} BPM hasta ${s.progMax}", style = T.small)
+                Seg(listOf(1 to "+1", 2 to "+2", 4 to "+4"), s.progStep) { s.progStep = it; Store.save() }
+                KSlider(s.progMax.toFloat(), 60f..160f, "${s.progMax}") { s.progMax = it.roundToInt(); Store.save() }
+            }
+            Text("Tono del beat", style = T.h2)
+            Seg(listOf(false to "Como un plato", true to "Keylock"), s.keylock) { s.keylock = it; Store.save(); Engine.nSetKeylock(it) }
+            Btn("Listo", Modifier.fillMaxWidth()) { Nav.bpmSheet = false }
+        }
     }
 }
 

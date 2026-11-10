@@ -65,7 +65,7 @@ object Techniques {
         Base("teardrop", "Tear adelante", "Tears", 3, listOf(1.0, 0.5),
             "Tear invertido: la ida se parte en dos y la vuelta es de una.",
             listOf("Fader abierto.", "Empujá hasta la mitad y frená.", "Terminá la ida.", "Volvé de una.")) { u -> listOf(S(0.45 * u, 0.0, 0.5, "1"), S(0.1 * u, 0.5, 0.5, "1"), S(0.45 * u, 0.5, 1.0, "1"), S(u, 1.0, 0.0, "1")) },
-        Base("teardouble", "Tear doble", "Tears", 3, listOf(1.0, 0.5),
+        Base("teardouble", "Clover tear", "Tears", 3, listOf(1.0, 0.5),
             "Ida y vuelta partidas: cuatro sonidos por ciclo con dos pausas cortas.",
             listOf("Fader abierto.", "Ida en dos partes.", "Vuelta en dos partes.", "Las pausas son cortas y parejas.")) { u ->
             listOf(S(0.45 * u, 0.0, 0.5, "1"), S(0.1 * u, 0.5, 0.5, "1"), S(0.45 * u, 0.5, 1.0, "1"), S(0.45 * u, 1.0, 0.5, "1"), S(0.1 * u, 0.5, 0.5, "1"), S(0.45 * u, 0.5, 0.0, "1"))
@@ -90,13 +90,13 @@ object Techniques {
         Base("flare1", "Flare 1 click", "Flares", 5, listOf(1.0, 0.5),
             "Fader abierto y un click (cierre rapidísimo) en medio de la ida: dos sonidos en un solo empuje.",
             listOf("Fader abierto.", "Empujá el disco.", "A mitad de la ida, cerrá y abrí el fader de un toque.", "Volvé con el fader abierto.")) { u -> listOf(S(u, 0.0, 1.0, "11011"), S(u, 1.0, 0.0, "1")) },
-        Base("orbit1", "Orbit 1 click", "Flares", 6, listOf(1.0, 0.5),
+        Base("orbit1", "Orbit 1 click", "Flares", 6, listOf(1.0, 0.5, 0.25),
             "Flare de 1 click en la ida y en la vuelta: cuatro sonidos por ciclo.",
             listOf("Fader abierto.", "Un click a mitad de la ida.", "Un click a mitad de la vuelta.")) { u -> listOf(S(u, 0.0, 1.0, "11011"), S(u, 1.0, 0.0, "11011")) },
         Base("flare2", "Flare 2 clicks", "Flares", 7, listOf(1.0, 0.5),
             "Dos clicks en la ida: tres sonidos en un empuje. La base del flare moderno.",
             listOf("Fader abierto.", "Empujá el disco parejo.", "Dos clicks repartidos en la ida.", "Volvé con el fader abierto.")) { u -> listOf(S(u, 0.0, 1.0, "1101011"), S(u, 1.0, 0.0, "1")) },
-        Base("orbit2", "Orbit 2 clicks", "Flares", 8, listOf(1.0, 0.5),
+        Base("orbit2", "Orbit 2 clicks", "Flares", 8, listOf(1.0, 0.5, 1 / 3.0),
             "Dos clicks en la ida y dos en la vuelta: seis sonidos por ciclo.",
             listOf("Fader abierto.", "Dos clicks en la ida.", "Dos clicks en la vuelta.", "Mantené los clicks parejos.")) { u -> listOf(S(u, 0.0, 1.0, "1101011"), S(u, 1.0, 0.0, "1101011")) },
         Base("flare3", "Flare 3 clicks", "Flares", 8, listOf(1.0),
@@ -114,6 +114,32 @@ object Techniques {
         Base("crab4", "Crab 4 dedos", "Crabs", 9, listOf(1.0, 0.5),
             "El crab completo: cuatro dedos, cuatro aperturas por trazo.",
             listOf("Fader cerrado contra el pulgar.", "Cascada de cuatro dedos.", "Ida y vuelta parejas.")) { u -> listOf(S(u, 0.0, 1.0, "010101010"), S(u, 1.0, 0.0, "010101010")) },
+
+        // ---- Pro: técnicas de nivel batalla (patrones según su descripción en escuelas de turntablism) ----
+        Base("ogflare", "OG flare", "Pro", 6, listOf(1.0, 0.5),
+            "El primer flare de dos clicks, de D-Styles: en la ida un click al final, como un chirp; en la vuelta, un flare de 1 click que corta el sonido al medio.",
+            listOf("Fader abierto.", "Empujá y hacé un click justo al final de la ida.", "En la vuelta, un click al medio.", "El fader nunca queda cerrado: son clicks.")) { u -> listOf(S(u, 0.0, 1.0, "1110"), S(u, 1.0, 0.0, "11011")) },
+        Base("ogflarerev", "OG flare invertido", "Pro", 6, listOf(1.0, 0.5),
+            "El OG flare dado vuelta: el click al medio va en la ida y el click del final en la vuelta.",
+            listOf("Fader abierto.", "Click al medio de la ida.", "Click justo al final de la vuelta.")) { u -> listOf(S(u, 0.0, 1.0, "11011"), S(u, 1.0, 0.0, "1110")) },
+        Base("chirpflare", "Chirp flare", "Pro", 6, listOf(0.5, 0.25),
+            "Alterna un chirp con un flare de 1 click, sin cortar: el combo clásico de D-Styles.",
+            listOf("Primer ida y vuelta: chirp.", "Segunda ida y vuelta: flare de 1 click.", "Sin pausa entre uno y otro.")) { u -> listOf(S(u, 0.0, 1.0, "10"), S(u, 1.0, 0.0, "01"), S(u, 0.0, 1.0, "11011"), S(u, 1.0, 0.0, "1")) },
+        Base("chirp2flare", "Chirp + 2 click flare", "Pro", 7, listOf(0.5),
+            "Un chirp seguido de un flare de 2 clicks.",
+            listOf("Ida y vuelta: chirp.", "Ida y vuelta: 2 click flare.", "Encadenados a tempo.")) { u -> listOf(S(u, 0.0, 1.0, "10"), S(u, 1.0, 0.0, "01"), S(u, 0.0, 1.0, "1101011"), S(u, 1.0, 0.0, "1")) },
+        Base("boomerang", "Boomerang", "Pro", 8, listOf(1.0, 0.5),
+            "El 2 click flare retrasado, de DJ Flare: el mismo movimiento de fader que el orbit de 2 clicks pero empezando cerrado, sobre babies continuos. Seis notas por ciclo, tres por trazo.",
+            listOf("Fader cerrado al empezar.", "Disco en baby, ida y vuelta parejas.", "Fader en 2 clicks continuos, corrido medio golpe.", "Tres notas en la ida, tres en la vuelta, sin pausa.")) { u -> listOf(S(u, 0.0, 1.0, "011011011"), S(u, 1.0, 0.0, "011011011")) },
+        Base("delayed3", "3 click retrasado", "Pro", 9, listOf(1.0),
+            "El orbit de 3 clicks con el fader corrido: los clicks quedan a caballo del cambio de dirección.",
+            listOf("Disco en baby.", "Fader en 3 clicks continuos.", "Empezá el ciclo de fader medio click tarde.")) { u -> listOf(S(u, 0.0, 1.0, "010101111"), S(u, 1.0, 0.0, "010101111")) },
+        Base("boomflare", "Boom flare", "Pro", 9, listOf(0.5),
+            "Boomerang más 2 click flare: un patrón de 12 notas.",
+            listOf("Primer ida y vuelta: boomerang (6 notas).", "Segunda ida y vuelta: orbit de 2 clicks (6 notas).", "Sin cortar el ritmo.")) { u -> listOf(S(u, 0.0, 1.0, "011011011"), S(u, 1.0, 0.0, "011011011"), S(u, 0.0, 1.0, "1101011"), S(u, 1.0, 0.0, "1101011")) },
+        Base("military", "Military", "Cortes", 4, listOf(0.5),
+            "Babies y stabs combinados con aire de marcha.",
+            listOf("Ida y vuelta en baby.", "Un stab corto y silencio.", "Marcado y parejo.")) { u -> listOf(S(u, 0.0, 1.0, "1"), S(u, 1.0, 0.0, "1"), S(0.35 * u, 0.0, 0.8, "1"), S(0.65 * u, 0.8, 0.0, "0"), S(u, 0.0, 0.0, "0")) },
     )
     private val baseMap = bases.associateBy { it.key }
 
@@ -180,8 +206,7 @@ object Techniques {
             "Rutina flares II" to listOf("flare2" to Q, "orbit2" to H, "transformer" to 4.0, "orbit1" to H),
             "Rutina crabs" to listOf("twiddle" to H, "crab3" to Q, "chirp" to 0.25, "crab4" to H),
         )
-        val nCombos = 100 - list.size - routines.size
-        for ((a, ua, bp) in pairs.take(nCombos)) {
+        for ((a, ua, bp) in pairs) {
             val (b, ub) = bp
             val A = baseMap.getValue(a); val B = baseMap.getValue(b)
             val level = clamp(max(A.level + lvlOf(A, ua), B.level + lvlOf(B, ub)) + 1)
@@ -190,6 +215,20 @@ object Techniques {
                 part(a, ua, 2.0) + part(b, ub, 2.0),
                 "Dos tiempos de ${A.name} ($la) y dos de ${B.name} ($lb), sin cortar el ritmo.",
                 listOf("Tiempos 1 y 2: ${A.name}.", "Tiempos 3 y 4: ${B.name}.", "El cambio cae justo en el tiempo 3, sin pausa."), bpmFor(level)))
+        }
+        val battle = listOf(
+            "Batalla I" to listOf("ogflare" to H, "boomerang" to H, "crab4" to H, "orbit2" to H),
+            "Batalla II" to listOf("chirpflare" to H, "orbit1" to 0.25, "boomerang" to H, "transformer" to 4.0),
+            "Batalla III" to listOf("boomflare" to H, "crab3" to H, "orbit2" to T, "chirp" to 0.25),
+            "Batalla IV" to listOf("ogflarerev" to H, "delayed3" to Q, "twiddle" to H, "orbit1" to 0.25),
+            "Batalla V" to listOf("boomerang" to H, "orbit3" to Q, "crab4" to H, "scribble" to 0.125),
+            "Batalla VI" to listOf("flare3" to Q, "boomflare" to H, "orbit2" to T, "crab3" to H),
+        )
+        battle.forEachIndexed { i, (name, parts) ->
+            list.add(Tech("batalla-${i + 1}", name, "Batalla", "Batalla", 10, "2 compases", 8,
+                parts.flatMap { (k, u) -> part(k, u, 2.0) },
+                "Nivel batalla: encadena " + parts.joinToString(", ") { baseMap.getValue(it.first).name } + " a tempo, sin respirar.",
+                parts.mapIndexed { j, (k, u) -> "Tiempos ${j * 2 + 1}–${j * 2 + 2}: ${baseMap.getValue(k).name} (${label(baseMap.getValue(k), u)})." }, 95))
         }
         routines.forEachIndexed { i, (name, parts) ->
             val level = clamp(parts.maxOf { (k, u) -> baseMap.getValue(k).level + lvlOf(baseMap.getValue(k), u) } + 1)

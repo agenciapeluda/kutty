@@ -97,6 +97,23 @@ public:
     int64_t beatStartFrame = 0;
     double beatPos = 0, beatRate = 1, beatLoopStart = 0, beatLoopLen = 0;
     bool beatLoop = true;
+    // keylock: dos cabezas de lectura a velocidad 1 con ventanas de Hann al 50 %
+    std::atomic<bool> keylock{false};
+    double klStart[2] = {0, 0}; int64_t klAge[2] = {0, 0};
+    double beatSample(const Buf* bt, double sec, float& l, float& r) {
+        if (beatLoop && beatLoopLen > 0) {
+            double e = beatLoopStart + beatLoopLen;
+            while (sec >= e) sec -= beatLoopLen;
+            while (sec < beatLoopStart && sec < 0) sec += beatLoopLen;
+        }
+        const int64_t len = bt->frames();
+        double x = sec * sr; int64_t k = (int64_t)x;
+        if (k < 0 || k + 1 >= len) { l = r = 0; return sec; }
+        float fr = float(x - k);
+        l = bt->data[k * 2] + (bt->data[(k + 1) * 2] - bt->data[k * 2]) * fr;
+        r = bt->data[k * 2 + 1] + (bt->data[(k + 1) * 2 + 1] - bt->data[k * 2 + 1]) * fr;
+        return sec;
+    }
     struct PendingRate { int64_t frame; double rate; };
     std::vector<PendingRate> rates;
     struct Click { int64_t frame; int accent; int age; bool active; };
@@ -247,7 +264,7 @@ public:
             const Cmd c = cmds[cmdTail % CMDN];
             cmdTail++;
             switch (c.type) {
-                case C_START_BEAT: beatOn = true; beatStartFrame = c.frame; beatPos = c.a; beatRate = c.b; beatLoopLen = c.c; beatLoopStart = c.a; beatLoop = c.flag != 0; rates.clear(); break;
+                case C_START_BEAT: beatOn = true; beatStartFrame = c.frame; beatPos = c.a; beatRate = c.b; beatLoopLen = c.c; beatLoopStart = c.a; beatLoop = c.flag != 0; rates.clear(); klStart[0] = klStart[1] = c.a; klAge[0] = 0; klAge[1] = (int64_t)(0.03 * sr); break;
                 case C_STOP_BEAT: beatOn = false; rates.clear(); for (auto& k : clicks) k.active = false; break;
                 case C_RATE: if (rates.size() < 64) rates.push_back({c.frame, c.a}); break;
                 case C_CLICK: {
@@ -295,12 +312,24 @@ public:
             float bl = 0, br = 0;
             if (beatOn && bt && f >= beatStartFrame) {
                 const int64_t len = bt->frames();
-                double x = beatPos * sr;
-                int64_t k = (int64_t)x;
-                if (k >= 0 && k + 1 < len) {
-                    float fr = float(x - k);
-                    bl = bt->data[k * 2] + (bt->data[(k + 1) * 2] - bt->data[k * 2]) * fr;
-                    br = bt->data[k * 2 + 1] + (bt->data[(k + 1) * 2 + 1] - bt->data[k * 2 + 1]) * fr;
+                if (keylock.load(std::memory_order_relaxed) && std::fabs(beatRate - 1.0) > 0.002) {
+                    const int64_t G = (int64_t)(0.06 * sr);
+                    for (int hd = 0; hd < 2; hd++) {
+                        if (klAge[hd] >= G) { klAge[hd] = 0; klStart[hd] = beatPos; }
+                        const double ph = (double)klAge[hd] / G;
+                        const float w = float(std::sin(M_PI * ph)); const float w2 = w * w;
+                        float l, r; beatSample(bt, klStart[hd] + (double)klAge[hd] / sr, l, r);
+                        bl += l * w2; br += r * w2;
+                        klAge[hd]++;
+                    }
+                } else {
+                    double x = beatPos * sr;
+                    int64_t k = (int64_t)x;
+                    if (k >= 0 && k + 1 < len) {
+                        float fr = float(x - k);
+                        bl = bt->data[k * 2] + (bt->data[(k + 1) * 2] - bt->data[k * 2]) * fr;
+                        br = bt->data[k * 2 + 1] + (bt->data[(k + 1) * 2 + 1] - bt->data[k * 2 + 1]) * fr;
+                    }
                 }
                 beatPos += beatRate / sr;
                 if (beatLoop && beatLoopLen > 0 && beatPos >= beatLoopStart + beatLoopLen) beatPos -= beatLoopLen;
@@ -407,6 +436,7 @@ JNIEXPORT void JNICALL JF(nSetVolumes)(JNIEnv*, jobject, jfloat b, jfloat s) { E
 JNIEXPORT void JNICALL JF(nStartBeat)(JNIEnv*, jobject, jlong frame, jdouble startSec, jdouble rate, jboolean loop, jdouble loopLen) {
     Cmd c; c.type = C_START_BEAT; c.frame = frame; c.a = startSec; c.b = rate; c.c = loopLen; c.flag = loop ? 1 : 0; E->push(c);
 }
+JNIEXPORT void JNICALL JF(nSetKeylock)(JNIEnv*, jobject, jboolean on) { if (E) E->keylock.store(on); }
 JNIEXPORT void JNICALL JF(nStopBeat)(JNIEnv*, jobject) { Cmd c; c.type = C_STOP_BEAT; E->push(c); }
 JNIEXPORT void JNICALL JF(nRate)(JNIEnv*, jobject, jlong frame, jdouble rate) { Cmd c; c.type = C_RATE; c.frame = frame; c.a = rate; E->push(c); }
 JNIEXPORT void JNICALL JF(nClick)(JNIEnv*, jobject, jlong frame, jboolean accent) { Cmd c; c.type = C_CLICK; c.frame = frame; c.flag = accent ? 1 : 0; E->push(c); }

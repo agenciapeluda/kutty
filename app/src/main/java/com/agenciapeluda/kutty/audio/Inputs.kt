@@ -39,6 +39,10 @@ object Inputs {
     @Volatile var fv = 0f            // posición del fader en pantalla 0..1
     @Volatile var padOpen = false
     @Volatile var midiFader = -1f    // crossfader MIDI 0..1 (-1: nunca llegó)
+    // práctica por partes: la app hace el fader (Solo plato) o el disco (Solo fader)
+    @Volatile var autoFader = false
+    @Volatile var autoDisc = false
+    @Volatile var autoFaderOpen = false
 
     // fuentes en uso (para mostrar en Ajustes)
     var discActive by mutableStateOf("touch")
@@ -67,6 +71,7 @@ object Inputs {
 
     fun faderOpen(): Boolean {
         val s = Store.set
+        if (autoFader) return autoFaderOpen
         return when (faderActive) {
             "midi" -> {
                 val x = midiFader.coerceIn(0f, 1f)
@@ -76,7 +81,7 @@ object Inputs {
                 if (s.hamster) !o else o
             }
             "dvs" -> dvsState[2] > 0.5f
-            else -> if (s.faderMode == "pad") padOpen else {
+            else -> if (s.faderMode == "pad") padOpen else if (s.faderMode == "cut") !padOpen else {
                 val v = if (s.hamster) 1f - fv else fv
                 v >= s.cutIn
             }
@@ -99,7 +104,7 @@ object Inputs {
         if (disc != discActive) discActive = disc
         if (fader != faderActive) faderActive = fader
         if (demo) Engine.nSetSources(0, 0)
-        else Engine.nSetSources(if (disc == "dvs") 1 else 0, if (fader == "dvs") 1 else 0)
+        else Engine.nSetSources(if (disc == "dvs" && !autoDisc) 1 else 0, if (fader == "dvs" && !autoFader) 1 else 0)
     }
 
     /** Llamar en cada cuadro. */
@@ -110,7 +115,8 @@ object Inputs {
         }
         val now = SystemClock.uptimeMillis()
         if (!demo) {
-            if (Store.set.motor && !touching && discActive != "dvs") {
+            if (autoDisc) { /* el disco lo mueve la app */ }
+            else if (Store.set.motor && !touching && discActive != "dvs") {
                 val dt = (now - lastT).coerceIn(0, 50) / 1000.0
                 p += dt / UNIT; vel = 1 / UNIT; lastT = now; send()
             } else if (touching && now - lastT > 18 && vel != 0.0) { vel = 0.0; send() }
@@ -123,12 +129,24 @@ object Inputs {
 
     fun send() {
         if (demo) return
-        Engine.setTarget(cueSec() + p * UNIT, vel * UNIT)
+        if (!autoDisc) Engine.setTarget(cueSec() + p * UNIT, vel * UNIT)
         Engine.setFader(faderOpen())
+    }
+
+    /** Posición del fader para dibujar (0..1, 1 = abierto del lado del scratch), sea cual sea la fuente. */
+    fun faderShown(): Float {
+        val s = Store.set
+        if (autoFader) return if (autoFaderOpen) 1f else 0f
+        return when (faderActive) {
+            "midi" -> { val x = midiFader.coerceIn(0f, 1f); if (s.xfaderSide == "left") 1f - x else x }
+            "dvs" -> if (dvsState[2] > 0.5f) 1f else 0f
+            else -> if (s.faderMode != "slide") (if (faderOpen()) 1f else 0f) else (if (s.hamster) 1f - fv else fv)
+        }
     }
 
     /** dp en unidades; t en milisegundos (uptime). */
     fun moveDisc(dp: Double, t: Long) {
+        if (autoDisc) return
         val dt = ((t - lastT).coerceAtLeast(1)) / 1000.0
         p += dp
         vel = vel * 0.5 + (dp / dt) * 0.5

@@ -42,6 +42,10 @@ class Settings {
     var discSrc by mutableStateOf("auto")
     var faderSrc by mutableStateOf("auto")
     var dvsDevice by mutableIntStateOf(0)      // 0 = ninguna
+    var keylock by mutableStateOf(false)
+    var progressive by mutableStateOf(false)
+    var progMax by mutableIntStateOf(110)
+    var progStep by mutableIntStateOf(2)
     var outDevice by mutableIntStateOf(0)      // 0 = auto (USB si hay), -1 = teléfono, otro = id
     var dvsThreshold by mutableStateOf(0.02f)
     var dvsInvert by mutableStateOf(false)
@@ -55,7 +59,7 @@ class Settings {
         put("beat", beat); put("sound", sound); put("beatVol", beatVol.toDouble()); put("scratchVol", scratchVol.toDouble())
         put("metro", metro); put("sens", sens.toDouble()); put("motor", motor); put("platter", platter); put("faderMode", faderMode)
         put("cutIn", cutIn.toDouble()); put("hamster", hamster); put("diff", diff); put("bars", bars); put("waves", waves); put("calib", calib)
-        put("discSrc", discSrc); put("faderSrc", faderSrc); put("dvsDevice", dvsDevice); put("outDevice", outDevice); put("dvsThreshold", dvsThreshold.toDouble())
+        put("discSrc", discSrc); put("faderSrc", faderSrc); put("dvsDevice", dvsDevice); put("outDevice", outDevice); put("keylock", keylock); put("progressive", progressive); put("progMax", progMax); put("progStep", progStep); put("dvsThreshold", dvsThreshold.toDouble())
         put("dvsInvert", dvsInvert); put("jogSteps", jogSteps); put("xfaderCutLag", xfaderCutLag.toDouble()); put("xfaderSide", xfaderSide)
         put("learnJog", learnJog); put("learnFader", learnFader)
     }
@@ -66,7 +70,7 @@ class Settings {
         platter = o.optString("platter", platter); faderMode = o.optString("faderMode", faderMode)
         cutIn = o.optDouble("cutIn", cutIn.toDouble()).toFloat(); hamster = o.optBoolean("hamster", hamster); diff = o.optString("diff", diff)
         bars = o.optInt("bars", bars); waves = o.optBoolean("waves", waves); calib = o.optInt("calib", calib)
-        discSrc = o.optString("discSrc", discSrc); faderSrc = o.optString("faderSrc", faderSrc); dvsDevice = o.optInt("dvsDevice", dvsDevice); outDevice = o.optInt("outDevice", outDevice)
+        discSrc = o.optString("discSrc", discSrc); faderSrc = o.optString("faderSrc", faderSrc); dvsDevice = o.optInt("dvsDevice", dvsDevice); outDevice = o.optInt("outDevice", outDevice); keylock = o.optBoolean("keylock", keylock); progressive = o.optBoolean("progressive", progressive); progMax = o.optInt("progMax", progMax); progStep = o.optInt("progStep", progStep)
         dvsThreshold = o.optDouble("dvsThreshold", dvsThreshold.toDouble()).toFloat(); dvsInvert = o.optBoolean("dvsInvert", dvsInvert)
         jogSteps = o.optInt("jogSteps", jogSteps); xfaderCutLag = o.optDouble("xfaderCutLag", xfaderCutLag.toDouble()).toFloat()
         xfaderSide = o.optString("xfaderSide", xfaderSide); learnJog = o.optString("learnJog", learnJog); learnFader = o.optString("learnFader", learnFader)

@@ -67,7 +67,7 @@ object Grading {
         return Ref(s.p0 + (s.p1 - s.p0) * x, s.mask[min(n - 1, floor(x * n).toInt())] - '0', (s.p1 - s.p0) / s.dur)
     }
 
-    private fun scoreAtLag(s: Timed, sm: Samples, L: Double, edgeB: Double): Grade {
+    private fun scoreAtLag(s: Timed, sm: Samples, L: Double, edgeB: Double, part: String = "completo"): Grade {
         val N = 24; val d = s.dur; val exp = (s.p1 - s.p0) / d; val moving = abs(s.p1 - s.p0) > 1e-3
         val h = max(d / 40, 0.004)
         var dirOk = 0; var oOk = 0; var oN = 0; var cOk = 0; var cN = 0
@@ -101,15 +101,16 @@ object Grading {
             o + c == 0.0 -> 0.0
             else -> 2 * o * c / (o + c)
         }
-        val score = 0.45 * motion + 0.55 * fad
+        // por partes: solo cuenta lo que hace el usuario
+        val score = when (part) { "plato" -> motion; "fader" -> fad; else -> 0.45 * motion + 0.55 * fad }
         return Grade(score, dir, amp, fad, o, c, L, ratio, score, 0)
     }
 
-    fun grade(s: Timed, sm: Samples, tolB: Double, edgeB: Double): Grade {
+    fun grade(s: Timed, sm: Samples, tolB: Double, edgeB: Double, part: String = "completo"): Grade {
         var best: Grade? = null
         for (i in -10..10) {
             val L = tolB * i / 10
-            val r = scoreAtLag(s, sm, L, edgeB)
+            val r = scoreAtLag(s, sm, L, edgeB, part)
             if (best == null || r.score > best.score + 1e-9 || (abs(r.score - best.score) < 1e-9 && abs(L) < abs(best.lag))) best = r
         }
         val b = best!!
@@ -139,11 +140,11 @@ object Grading {
     }
 
     /** Devolución en palabras: (nivel: 0 ok, 1 aviso, 2 mal, texto). */
-    fun feedback(graded: List<Timed>, sm: Samples, bpm: Double, acc: Double, learning: Boolean): List<Pair<Int, String>> {
+    fun feedback(graded: List<Timed>, sm: Samples, bpm: Double, acc: Double, learning: Boolean, part: String = "completo"): List<Pair<Int, String>> {
         val out = ArrayList<Pair<Int, String>>()
         val ms = { b: Double -> (b * 60000 / bpm).roundToInt() }
         val cr = clickReport(graded, sm, 0.09 * bpm / 60)
-        if (cr.expected > 0) {
+        if (cr.expected > 0 && part != "plato") {
             if (cr.miss.toDouble() / cr.expected > 0.2) out.add(2 to "Te faltaron ${cr.miss} de ${cr.expected} cambios de fader.")
             if (cr.offsets.isNotEmpty()) {
                 val m = cr.offsets.average()
@@ -155,19 +156,24 @@ object Grading {
         val gs = graded.mapNotNull { it.g }
         if (gs.isEmpty()) return out
         val dirBad = gs.count { it.dir < 0.5 }.toDouble() / gs.size
-        if (dirBad > 0.15) out.add(2 to "En el ${(dirBad * 100).roundToInt()}% de los trazos el disco fue para otro lado o se quedó quieto.")
+        if (dirBad > 0.15 && part != "fader") out.add(2 to "En el ${(dirBad * 100).roundToInt()}% de los trazos el disco fue para otro lado o se quedó quieto.")
         val ratios = gs.mapNotNull { it.ratio }.filter { it > 0 && it.isFinite() }.sorted()
-        if (ratios.isNotEmpty()) {
+        if (ratios.isNotEmpty() && part != "fader") {
             val med = ratios[ratios.size / 2]
             if (med < 0.7) out.add(1 to "Trazos cortos: movés el disco un ${((1 - med) * 100).roundToInt()}% menos de lo que pide la técnica.")
             else if (med > 1.45) out.add(1 to "Trazos largos: movés el disco un ${((med - 1) * 100).roundToInt()}% de más.")
         }
         val closed = gs.mapNotNull { it.closed }; val open = gs.mapNotNull { it.open }
-        if (closed.isNotEmpty() && closed.average() < 0.7) out.add(2 to "Dejás el fader abierto donde tiene que estar cerrado.")
-        if (open.isNotEmpty() && open.average() < 0.7) out.add(2 to "Te falta abrir el fader en las partes que suenan.")
+        if (part != "plato" && closed.isNotEmpty() && closed.average() < 0.7) out.add(2 to "Dejás el fader abierto donde tiene que estar cerrado.")
+        if (part != "plato" && open.isNotEmpty() && open.average() < 0.7) out.add(2 to "Te falta abrir el fader en las partes que suenan.")
         val lag = gs.map { it.lag }.average()
         if (abs(ms(lag)) > 20) out.add(1 to "En general vas ${abs(ms(lag))} ms ${if (lag > 0) "atrasado" else "adelantado"} respecto del beat.")
-        if (acc >= 0.85) out.add(0 to if (learning) "Listo para Practicar." else "Técnica dominada. Probá subir el BPM o pasar a Desafío.")
+        if (acc >= 0.85) out.add(0 to when {
+            learning -> "Listo para Practicar."
+            part == "plato" -> "La mano del disco está. Probá Solo fader y después Completo."
+            part == "fader" -> "La mano del fader está. Probá Solo plato y después Completo."
+            else -> "Técnica dominada. Probá subir el BPM o pasar a Desafío."
+        })
         return out.take(5)
     }
 }

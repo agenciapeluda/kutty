@@ -59,7 +59,7 @@ private fun SRow(label: String, hint: String? = null, content: @Composable () ->
 }
 
 @Composable
-private fun KSlider(value: Float, range: ClosedFloatingPointRange<Float>, label: String, onChange: (Float) -> Unit) {
+fun KSlider(value: Float, range: ClosedFloatingPointRange<Float>, label: String, onChange: (Float) -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         Slider(value, onChange, Modifier.weight(1f), valueRange = range, onValueChangeFinished = { Store.save() },
             colors = SliderDefaults.colors(thumbColor = C.accent, activeTrackColor = C.accent, inactiveTrackColor = C.divider))
@@ -180,7 +180,8 @@ fun AjustesScreen() {
         SRow("Sensibilidad") { KSlider(s.sens, 0.4f..2.5f, "×${"%.2f".format(s.sens)}") { s.sens = it } }
 
         H2("Fader en pantalla")
-        SRow("Modo", "Botón: mientras lo tocás, suena") { Seg(listOf("slide" to "Deslizar", "pad" to "Botón"), s.faderMode) { s.faderMode = it; Store.save() } }
+        SRow("Modo en pantalla", "Botón redondo para el pulgar: «Abre» suena mientras lo apretás; «Corta» suena solo y cada toque es un click (flares)") { Seg(listOf("slide" to "Deslizar", "pad" to "Botón abre", "cut" to "Botón corta"), s.faderMode) { s.faderMode = it; Store.save() } }
+        SRow("Tono del beat al cambiar el BPM") { Seg(listOf(false to "Como un plato", true to "Keylock"), s.keylock) { s.keylock = it; Store.save(); Engine.nSetKeylock(it) } }
         SRow("Cut-in", "Cuánto hay que mover el fader para que suene") { KSlider(s.cutIn, 0.02f..0.4f, "${(s.cutIn * 100).roundToInt()}%") { s.cutIn = it } }
         SRow("Hamster") { Seg(listOf(false to "Normal", true to "Invertido"), s.hamster) { s.hamster = it; Store.save() } }
 

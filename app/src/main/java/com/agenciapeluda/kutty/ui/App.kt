@@ -60,6 +60,7 @@ import java.util.Locale
 object Nav {
     var tab by mutableStateOf("hoy")
     var practice by mutableStateOf(false)
+    var bpmSheet by mutableStateOf(false)
     var detail by mutableStateOf<Tech?>(null)
     var chooser by mutableStateOf<String?>(null)
     var soundEditor by mutableStateOf<String?>(null)

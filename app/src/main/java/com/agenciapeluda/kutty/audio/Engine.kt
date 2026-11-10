@@ -21,6 +21,7 @@ object Engine {
     external fun nStart(deviceId: Int, channels: Int): Int
     external fun nSetOutput(deviceId: Int, channels: Int)
     external fun nOutInfo(out: IntArray)
+    external fun nSetKeylock(on: Boolean)
     external fun nSetSample(data: FloatArray)
     external fun nSetBeat(interleaved: FloatArray)
     external fun nSetTarget(t: Double, v: Double)
