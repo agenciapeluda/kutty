@@ -1,0 +1,52 @@
+# Compila el APK de Kutty en cada push a main y lo publica como release
+# ("Kutty 0.1.N"), para bajarlo directo desde el teléfono.
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Instalar NDK
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" "cmake;3.22.1" > /dev/null
+
+      - name: Compilar
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Publicar release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="0.1.${{ github.run_number }}"
+          cp app/build/outputs/apk/release/app-release.apk "kutty-$V.apk"
+          gh release create "v$V" "kutty-$V.apk" --title "Kutty $V" --notes "Build ${{ github.sha }}" --target "${{ github.sha }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kutty-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: ignore

@@ -1,0 +1,2 @@
+-keep class com.agenciapeluda.kutty.audio.Engine { *; }
+-keepclasseswithmembernames class * { native <methods>; }
