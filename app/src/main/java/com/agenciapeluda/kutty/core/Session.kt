@@ -17,11 +17,10 @@ import kotlin.math.roundToInt
 
 class Flash(val b: Double, val grade: Int, val at: Long)
 
-class Result(val rec: SessionRec, val feedback: List<Pair<Int, String>>, val timed: List<Timed>, val total: Double)
+class Result(val rec: SessionRec, val feedback: List<Pair<Int, String>>, val timed: List<Timed>, val total: Double, val guide: Curve, val tolB: Double)
 
 /** La práctica: plan de trazos, reloj de tiempos, demo, calificación y cierre. */
 object Session {
-    val TOL = mapOf("facil" to 90, "normal" to 60, "pro" to 35)
     val MODE_MULT = mapOf("aprender" to 0.5, "practicar" to 1.0, "desafio" to 1.5)
     val GRADE_PTS = intArrayOf(100, 70, 30, 0)
 
@@ -47,6 +46,10 @@ object Session {
     class Seg(val frame: Double, val beat: Double, val bpm: Double)
     private val segs = ArrayList<Seg>()
     var timed: List<Timed> = emptyList(); private set
+    /** La guía (curva humana ideal) y cómo toca la app (demo y manos automáticas, según Ajustes › Demo). */
+    var guide: Curve = Curve.EMPTY; private set
+    var perf: Curve = Curve.EMPTY; private set
+    private val lag = LagTracker()
     val samples = Samples()
     val graded = ArrayList<Timed>()
     val flash = ArrayList<Flash>()
@@ -87,7 +90,7 @@ object Session {
         tech = t; mode = m; ended = false; result = null
         val b = Store.curBeat()
         bpm = if (b != null && !b.builtin) b.bpm.roundToInt() else t.bpm
-        timed = emptyList(); graded.clear(); samples.clear(); flash.clear()
+        timed = emptyList(); guide = Curve.EMPTY; perf = Curve.EMPTY; graded.clear(); samples.clear(); flash.clear()
         hudPts = 0; hudCombo = 0; hudAcc = -1
     }
 
@@ -119,14 +122,19 @@ object Session {
             }
         }
         timed = list; total = beats
+        guide = Human.ideal(list, bpm.toDouble())
+        perf = Human.perform(list, bpm.toDouble(), Store.set.demo, System.nanoTime())
     }
+
+    /** Tolerancias de la exigencia actual (Aprender siempre en Fácil). */
+    fun tol(b: Double = heardBeat): Tol = Tol.of(if (mode == "aprender" && !demoOnly) "facil" else Store.set.diff, if (running || ended) bpmAt(b) else bpm.toDouble())
 
     fun start(demo: Boolean) {
         val beat = Store.curBeat() ?: return
         stop(true)
         demoOnly = demo
         plan()
-        samples.clear(); graded.clear(); flash.clear()
+        samples.clear(); graded.clear(); flash.clear(); lag.reset()
         nextGrade = 0; combo = 0; maxCombo = 0; pts = 0; ended = false; blocks = 0; result = null
         challengeBpm = bpm
         Inputs.resetDisc()
@@ -201,7 +209,7 @@ object Session {
         val demoNow = cur?.demo == true
         if (demoNow) {
             if (!Inputs.demo) { Inputs.demo = true; Inputs.resolve() }
-            val r = Grading.refAt(timed, schedB)
+            val r = Grading.refAt(perf, schedB)
             val cue = Inputs.cueSec()
             Engine.nSetTarget(cue + r.p * UNIT, r.v * UNIT * bpmAt(schedB) / 60)
             Engine.setFader(r.f == 1)
@@ -211,7 +219,7 @@ object Session {
         }
         // por partes: la app hace la otra mano, perfecta
         if (!demoNow && (Inputs.autoFader || Inputs.autoDisc)) {
-            val r = if (schedB >= 0) Grading.refAt(timed, schedB) else null
+            val r = if (schedB >= 0) Grading.refAt(perf, schedB) else null
             if (Inputs.autoFader) { val o = r?.f == 1; if (o != Inputs.autoFaderOpen) { Inputs.autoFaderOpen = o; Engine.setFader(o) } }
             if (Inputs.autoDisc) {
                 val p = r?.p ?: 0.0
@@ -220,14 +228,14 @@ object Session {
             }
         }
         val heard = heardBeat
-        val tolMs = TOL[if (mode == "aprender") "facil" else Store.set.diff] ?: 60
-        val tolB = tolMs / 1000.0 * bpmAt(heard) / 60
+        val tol = tol(heard)
         val t = tech!!
         while (nextGrade < timed.size) {
             val s = timed[nextGrade]
-            if (heard < s.b1 + tolB + 0.08) break
+            // espera lo justo para ver el giro del final (con el desfase general ya medido)
+            if (heard < s.b1 + max(0.0, lag.value()) + 2.5 * tol.turnB + 0.04) break
             if (!s.demo) {
-                val g = Grading.grade(s, samples, tolB, 0.014 * bpmAt(s.b0) / 60, if (demoOnly) "completo" else part)
+                val g = Grading.grade(timed, nextGrade, guide, samples, tol(s.b0), if (demoOnly) "completo" else part, lag)
                 s.g = g
                 graded.add(s)
                 if (g.grade <= Grade.GOOD) combo++ else combo = 0
@@ -275,14 +283,14 @@ object Session {
         // la técnica se domina con las dos manos
         if (mode != "aprender" && !aborted && part == "completo") Store.best[t.id] = max(Store.best[t.id] ?: 0, rec.acc)
         Store.save()
-        val fb = ArrayList(Grading.feedback(graded, samples, rec.bpm.toDouble(), acc, mode == "aprender", part))
+        val fb = ArrayList(Grading.feedback(graded, rec.bpm.toDouble(), acc, mode == "aprender", part, Tol.of(if (mode == "aprender") "facil" else Store.set.diff, rec.bpm.toDouble())))
         // BPM progresivo: si lo pasaste bien, la próxima va un poco más rápido
         val s = Store.set
         if (s.progressive && !aborted && mode == "practicar" && acc >= 0.85 && bpm < s.progMax) {
             bpm = min(s.progMax, bpm + s.progStep); bpmNote = "Subió a $bpm BPM"
             fb.add(0, 0 to "Pasaste el ejercicio: la próxima va a $bpm BPM.")
         }
-        result = Result(rec, fb, timed, total)
+        result = Result(rec, fb, timed, total, guide, tol().turnB)
         hud()
     }
 

@@ -3,8 +3,10 @@ package com.agenciapeluda.kutty.ui
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
@@ -16,7 +18,9 @@ import androidx.compose.ui.unit.sp
 import com.agenciapeluda.kutty.audio.Peaks
 import com.agenciapeluda.kutty.audio.REV
 import com.agenciapeluda.kutty.audio.UNIT
+import com.agenciapeluda.kutty.core.Curve
 import com.agenciapeluda.kutty.core.Flash
+import com.agenciapeluda.kutty.core.Human
 import com.agenciapeluda.kutty.core.Samples
 import com.agenciapeluda.kutty.core.Tech
 import com.agenciapeluda.kutty.core.Techniques
@@ -57,7 +61,41 @@ fun DrawScope.waveRange(pk: Peaks, s0: Double, s1: Double, top: Float, h: Float,
 class TtmOpts(
     val b0: Double, val b1: Double, val now: Double?, val strokes: List<Timed>, val samples: Samples?,
     val flash: List<Flash>? = null, val grid: Boolean = true, val bg: Peaks? = null, val bgSec: ((Double) -> Double?)? = null,
+    /** La guía (curva humana) y el ancho de la banda de tolerancia, en tiempos (0 = sin banda). */
+    val guide: Curve? = null, val tolB: Double = 0.0,
 )
+
+/** Tramo de la curva como trazo continuo. */
+private fun curvePath(c: Curve, ta: Double, tb: Double, step: Double, X: (Double) -> Float, Y: (Double) -> Float): Path {
+    val p = Path(); var t = ta
+    p.moveTo(X(t), Y(c.pos(t)))
+    while (t < tb) { t = min(tb, t + step); p.lineTo(X(t), Y(c.pos(t))) }
+    return p
+}
+
+/** La guía: la curva humana partida donde corta el fader (abierto grueso, cerrado punteado). */
+private fun DrawScope.drawGuide(
+    strokes: List<Timed>, c: Curve, b0: Double, b1: Double, step: Double, X: (Double) -> Float, Y: (Double) -> Float,
+    wOpen: Float, wClosed: Float, dashFx: PathEffect, color: (Timed) -> Color, alphaOpen: (Timed) -> Float, alphaClosed: (Timed) -> Float,
+) {
+    for (s in strokes) {
+        if (s.b1 < b0 || s.b0 > b1) continue
+        val n = s.mask.length
+        val col = color(s)
+        var k = 0
+        while (k < n) {
+            var e = k + 1
+            while (e < n && s.mask[e] == s.mask[k]) e++
+            val xa = max(b0, s.b0 + s.dur * k / n); val xb = min(b1, s.b0 + s.dur * e / n)
+            if (xb > xa) {
+                val path = curvePath(c, xa, xb, step, X, Y)
+                if (s.mask[k] == '1') drawPath(path, col, alpha = alphaOpen(s), style = Stroke(wOpen, cap = StrokeCap.Round, join = StrokeJoin.Round))
+                else drawPath(path, C.dim, alpha = alphaClosed(s), style = Stroke(wClosed, pathEffect = dashFx))
+            }
+            k = e
+        }
+    }
+}
 
 fun DrawScope.drawTtm(tm: TextMeasurer, o: TtmOpts, top: Float = 0f) {
     val W = size.width; val H = size.height - top
@@ -83,19 +121,20 @@ fun DrawScope.drawTtm(tm: TextMeasurer, o: TtmOpts, top: Float = 0f) {
         b += 1.0
     }
     for (p in listOf(0.0, 1.0)) drawLine(C.divider, Offset(0f, Y(p)), Offset(W, Y(p)), 1f, pathEffect = dashGrid)
-    // referencia
-    for (s in o.strokes) {
-        if (s.b1 < o.b0 || s.b0 > o.b1) continue
-        val n = s.mask.length
-        val g = s.g
-        val col = if (g != null) C.grade[g.grade] else if (s.demo) C.deck2 else C.accentText
-        val past = o.now != null && s.b1 < o.now
-        for (k in 0 until n) {
-            val xa = s.b0 + s.dur * k / n; val xb = s.b0 + s.dur * (k + 1) / n
-            val pa = s.p0 + (s.p1 - s.p0) * k / n; val pb = s.p0 + (s.p1 - s.p0) * (k + 1) / n
-            if (s.mask[k] == '1') drawLine(col, Offset(X(xa), Y(pa)), Offset(X(xb), Y(pb)), 4f * density, StrokeCap.Round, alpha = if (past && g == null) 0.35f else if (past) 0.55f else 1f)
-            else drawLine(C.dim, Offset(X(xa), Y(pa)), Offset(X(xb), Y(pb)), 1.5f * density, pathEffect = dash, alpha = if (past) 0.5f else 0.9f)
+    // referencia: la curva humana, con su banda de tolerancia tenue
+    if (o.strokes.isNotEmpty()) {
+        val guide = o.guide ?: Human.ideal(o.strokes, 90.0)
+        val step = (o.b1 - o.b0) / W * 2.5 * density
+        val va = max(o.b0, o.strokes.first().b0); val vb = min(o.b1, o.strokes.last().b1)
+        if (o.tolB > 0 && vb > va) {
+            val tolPx = (o.tolB / (o.b1 - o.b0) * W).toFloat()
+            drawPath(curvePath(guide, va, vb, step, ::X, ::Y), C.accentText, alpha = 0.10f, style = Stroke(2 * tolPx, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
+        val past = { s: Timed -> o.now != null && s.b1 < o.now }
+        drawGuide(o.strokes, guide, o.b0, o.b1, step, ::X, ::Y, 4f * density, 1.5f * density, dash,
+            { s -> s.g?.let { C.grade[it.grade] } ?: if (s.demo) C.deck2 else C.accentText },
+            { s -> if (past(s) && s.g == null) 0.35f else if (past(s)) 0.55f else 1f },
+            { s -> if (past(s)) 0.5f else 0.9f })
     }
     // trazo del usuario
     val sm = o.samples
@@ -201,6 +240,15 @@ fun DrawScope.drawHalfDisc(p: Double, open: Boolean, c: Offset, r: Float, base: 
     drawCircle(C.cue, 4.5f * density, Offset(c.x + (cos(cr) * ringR).toFloat(), c.y + (sin(cr) * ringR).toFloat()))
 }
 
+private val miniDash = PathEffect.dashPathEffect(floatArrayOf(4f, 6f))
+private val miniCache = HashMap<String, Pair<List<Timed>, Curve>>()
+
+private fun miniGuide(t: Tech, cycles: Int) = miniCache.getOrPut(t.id + ":" + cycles) {
+    val list = ArrayList<Timed>(); var start = 0.0
+    repeat(cycles) { list += Techniques.timeStrokes(t.strokes, start); start += t.beats }
+    list to Human.ideal(list, t.bpm.toDouble())
+}
+
 /** Mini gráfico de una técnica (tarjetas y detalle). */
 fun DrawScope.drawMiniTtm(t: Tech, cycles: Int = if (t.beats >= 8) 1 else 2) {
     val beats = t.beats * cycles
@@ -208,19 +256,9 @@ fun DrawScope.drawMiniTtm(t: Tech, cycles: Int = if (t.beats >= 8) 1 else 2) {
     fun X(b: Double) = (b / beats * W).toFloat()
     fun Y(p: Double) = (pad + (1 - p) * (H - 2 * pad)).toFloat()
     for (b in 0..beats) drawLine(if (b % 4 == 0) C.tick else C.divider, Offset(X(b.toDouble()), 0f), Offset(X(b.toDouble()), H), 1f)
-    var start = 0.0
-    repeat(cycles) {
-        for (s in Techniques.timeStrokes(t.strokes, start)) {
-            val n = s.mask.length
-            for (k in 0 until n) {
-                val xa = s.b0 + s.dur * k / n; val xb = s.b0 + s.dur * (k + 1) / n
-                val pa = s.p0 + (s.p1 - s.p0) * k / n; val pb = s.p0 + (s.p1 - s.p0) * (k + 1) / n
-                if (s.mask[k] == '1') drawLine(C.accentText, Offset(X(xa), Y(pa)), Offset(X(xb), Y(pb)), 2.2f * density, StrokeCap.Round)
-                else drawLine(C.dim, Offset(X(xa), Y(pa)), Offset(X(xb), Y(pb)), 1.2f * density, pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 6f)))
-            }
-        }
-        start += t.beats
-    }
+    val (timed, guide) = miniGuide(t, cycles)
+    drawGuide(timed, guide, 0.0, beats.toDouble(), beats / W.toDouble() * 2 * density, ::X, ::Y, 2.2f * density, 1.2f * density,
+        miniDash, { C.accentText }, { 1f }, { 1f })
 }
 
 fun DrawScope.marker(x: Float, color: Color) {

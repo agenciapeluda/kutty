@@ -16,7 +16,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = buildNumber
-        versionName = "0.3.$buildNumber"
+        versionName = "0.4.$buildNumber"
         ndk { abiFilters += listOf("arm64-v8a", "x86_64") }
         externalNativeBuild { cmake { cppFlags += listOf("-std=c++17", "-O3", "-ffast-math"); arguments += listOf("-DANDROID_STL=c++_shared") } }
     }
@@ -51,6 +51,11 @@ android {
     packaging { resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" } }
 }
 
+// Calibración de la puntuación (app/src/test): si un umbral falla, no hay APK.
+tasks.withType<Test>().configureEach {
+    testLogging { showStandardStreams = true; events("passed", "failed"); exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
+}
+
 dependencies {
     val bom = platform("androidx.compose:compose-bom:2024.12.01")
     implementation(bom)
@@ -63,4 +68,5 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.google.oboe:oboe:1.9.3")
+    testImplementation("junit:junit:4.13.2")
 }

@@ -246,6 +246,7 @@ private fun Stage(mod: Modifier, frame: Long) {
             if (live) Session.timed else emptyList(), Session.samples, Session.flash, live,
             if (Store.set.waves && live && beat != null) beat.peaks else null,
             if (beat != null) { b: Double -> beat.secAt(b) } else null,
+            Session.guide, if (live) Session.tol().turnB else 0.0,
         ), strip)
     }
 }
@@ -500,7 +501,7 @@ private fun Results(r: com.agenciapeluda.kutty.core.Result) {
                     rec.counts.forEachIndexed { i, n -> Text("${C.gradeName[i]} $n", style = T.small.copy(color = C.grade[i])) }
                 }
                 Canvas(Modifier.fillMaxWidth().height(120.dp).clip(R12).background(C.dark)) {
-                    drawTtm(tm, TtmOpts(-0.3, min(r.total, 32.0) + 0.3, null, r.timed, Session.samples))
+                    drawTtm(tm, TtmOpts(-0.3, min(r.total, 32.0) + 0.3, null, r.timed, Session.samples, guide = r.guide, tolB = r.tolB))
                 }
                 Spacer(Modifier.height(12.dp))
                 r.feedback.forEach { (lv, txt) ->

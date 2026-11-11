@@ -6,7 +6,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 /** Un trazo: duración en tiempos, posición del disco (0 = cue, 1 = un cuarto de vuelta) y fader ("1" abierto, "0" cerrado, en partes iguales). */
-data class Stroke(val dur: Double, val p0: Double, val p1: Double, val mask: String)
+/** fam: familia de la técnica de origen (le da carácter a la curva humana). */
+data class Stroke(val dur: Double, val p0: Double, val p1: Double, val mask: String, val fam: String = "")
 
 class Timed(val s: Stroke, val b0: Double, val demo: Boolean = false) {
     val b1 get() = b0 + s.dur
@@ -171,7 +172,8 @@ object Techniques {
         require(abs(t - beats) < 1e-6) { "El ciclo no entra en $beats tiempos" }
         return out
     }
-    private fun part(key: String, u: Double, beats: Double) = fill(baseMap.getValue(key).build(u), beats)
+    private fun cyc(b: Base, u: Double) = b.build(u).map { it.copy(fam = b.family) }
+    private fun part(key: String, u: Double, beats: Double) = fill(cyc(baseMap.getValue(key), u), beats)
 
     val all: List<Tech> by lazy { build() }
     val byId: Map<String, Tech> by lazy { all.associateBy { it.id } }
@@ -179,11 +181,11 @@ object Techniques {
     private fun build(): List<Tech> {
         val list = ArrayList<Tech>()
         for (b in bases) for (u in b.rhythms) {
-            val cyc = b.build(u)
-            val beats = max(2, ceil(cycleDur(cyc) - 1e-6).toInt())
+            val cy = cyc(b, u)
+            val beats = max(2, ceil(cycleDur(cy) - 1e-6).toInt())
             val level = clamp(b.level + lvlOf(b, u))
             val lab = label(b, u)
-            list.add(Tech(b.key + "-" + u.toString().filter { it.isDigit() }.take(4), b.fixedName ?: (b.name + " · " + lab), b.name, b.family, level, lab, beats, fill(cyc, beats.toDouble()), b.desc, b.steps, bpmFor(level)))
+            list.add(Tech(b.key + "-" + u.toString().filter { it.isDigit() }.take(4), b.fixedName ?: (b.name + " · " + lab), b.name, b.family, level, lab, beats, fill(cy, beats.toDouble()), b.desc, b.steps, bpmFor(level)))
         }
         val H = 0.5; val Q = 1.0; val T = 1 / 3.0
         val pairs = listOf(

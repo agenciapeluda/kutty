@@ -35,6 +35,7 @@ class Settings {
     var cutIn by mutableStateOf(0.08f)
     var hamster by mutableStateOf(false)
     var diff by mutableStateOf("normal")
+    var demo by mutableStateOf("natural")      // cómo toca la app: robot | natural | suelta
     var bars by mutableIntStateOf(4)
     var waves by mutableStateOf(true)
     var calib by mutableIntStateOf(0)
@@ -60,7 +61,7 @@ class Settings {
     fun toJson() = JSONObject().apply {
         put("beat", beat); put("sound", sound); put("beatVol", beatVol.toDouble()); put("scratchVol", scratchVol.toDouble())
         put("metro", metro); put("sens", sens.toDouble()); put("motor", motor); put("platter", platter); put("faderMode", faderMode)
-        put("cutIn", cutIn.toDouble()); put("hamster", hamster); put("diff", diff); put("bars", bars); put("waves", waves); put("calib", calib)
+        put("cutIn", cutIn.toDouble()); put("hamster", hamster); put("diff", diff); put("demo", demo); put("bars", bars); put("waves", waves); put("calib", calib)
         put("discSrc", discSrc); put("faderSrc", faderSrc); put("dvsDevice", dvsDevice); put("outDevice", outDevice); put("keylock", keylock); put("progressive", progressive); put("progMax", progMax); put("progStep", progStep); put("dvsThreshold", dvsThreshold.toDouble())
         put("dvsInvert", dvsInvert); put("jogSteps", jogSteps); put("xfaderCutLag", xfaderCutLag.toDouble()); put("xfaderSide", xfaderSide)
         put("learnJog", learnJog); put("learnFader", learnFader); put("holdCuts", holdCuts); put("phoneLayout", phoneLayout)
@@ -70,7 +71,7 @@ class Settings {
         beatVol = o.optDouble("beatVol", beatVol.toDouble()).toFloat(); scratchVol = o.optDouble("scratchVol", scratchVol.toDouble()).toFloat()
         metro = o.optBoolean("metro", metro); sens = o.optDouble("sens", sens.toDouble()).toFloat(); motor = o.optBoolean("motor", motor)
         platter = o.optString("platter", platter); faderMode = o.optString("faderMode", faderMode)
-        cutIn = o.optDouble("cutIn", cutIn.toDouble()).toFloat(); hamster = o.optBoolean("hamster", hamster); diff = o.optString("diff", diff)
+        cutIn = o.optDouble("cutIn", cutIn.toDouble()).toFloat(); hamster = o.optBoolean("hamster", hamster); diff = o.optString("diff", diff); demo = o.optString("demo", demo)
         bars = o.optInt("bars", bars); waves = o.optBoolean("waves", waves); calib = o.optInt("calib", calib)
         discSrc = o.optString("discSrc", discSrc); faderSrc = o.optString("faderSrc", faderSrc); dvsDevice = o.optInt("dvsDevice", dvsDevice); outDevice = o.optInt("outDevice", outDevice); keylock = o.optBoolean("keylock", keylock); progressive = o.optBoolean("progressive", progressive); progMax = o.optInt("progMax", progMax); progStep = o.optInt("progStep", progStep)
         dvsThreshold = o.optDouble("dvsThreshold", dvsThreshold.toDouble()).toFloat(); dvsInvert = o.optBoolean("dvsInvert", dvsInvert)

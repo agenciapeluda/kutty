@@ -1,5 +1,6 @@
 # Compila el APK de Kutty en cada push a main y lo publica como release
-# ("Kutty 0.3.N"), para bajarlo directo desde el teléfono.
+# ("Kutty 0.4.N"), para bajarlo directo desde el teléfono.
+# Antes corre la calibración de la puntuación: si falla un umbral, no sale el build.
 name: Android APK
 
 on:
@@ -33,6 +34,9 @@ jobs:
       - name: Instalar NDK
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;27.2.12479018" "cmake;3.22.1" > /dev/null
 
+      - name: Calibrar puntuación (tests JVM)
+        run: gradle :app:testReleaseUnitTest --stacktrace
+
       - name: Compilar
         run: gradle :app:assembleRelease --stacktrace
 
@@ -40,7 +44,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          V="0.3.${{ github.run_number }}"
+          V="0.4.${{ github.run_number }}"
           cp app/build/outputs/apk/release/app-release.apk "kutty-$V.apk"
           gh release create "v$V" "kutty-$V.apk" --title "Kutty $V" --notes "Build ${{ github.sha }}" --target "${{ github.sha }}"
 
@@ -49,4 +53,11 @@ jobs:
         with:
           name: kutty-apk
           path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: ignore
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: calibracion
+          path: app/build/reports/tests/
           if-no-files-found: ignore

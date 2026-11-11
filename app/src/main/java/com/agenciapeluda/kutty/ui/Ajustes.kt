@@ -1,5 +1,6 @@
 package com.agenciapeluda.kutty.ui
 
+import com.agenciapeluda.kutty.core.Tol
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -192,7 +193,13 @@ fun AjustesScreen() {
         }
 
         H2("Precisión")
-        SRow("Exigencia") { Seg(listOf("facil" to "Fácil ±90", "normal" to "Normal ±60", "pro" to "Pro ±35"), s.diff) { s.diff = it; Store.save() } }
+        val tolMs = Tol.TABLE[s.diff]?.first ?: intArrayOf(45, 30, 60)
+        SRow("Exigencia", "Cambio de dirección ±${tolMs[0]} ms · corte ±${tolMs[1]} ms · desfase parejo libre hasta ${tolMs[2]} ms") {
+            Seg(listOf("facil" to "Fácil", "normal" to "Normal", "pro" to "Pro"), s.diff) { s.diff = it; Store.save() }
+        }
+        SRow("Demo", "Cómo toca la app en Escuchar, en las demos de Aprender y en la mano automática de Solo plato y Solo fader. Natural varía un poco cada repetición, como una persona") {
+            Seg(listOf("robot" to "Robot", "natural" to "Natural", "suelta" to "Suelta"), s.demo) { s.demo = it; Store.save() }
+        }
         SRow("Largo de la práctica") { Seg(listOf(4 to "4 compases", 8 to "8 compases"), s.bars) { s.bars = it; Store.save() } }
         SRow("Latencia", "Salida de audio: ${lat.roundToInt()} ms. Si la app te marca siempre tarde o antes, corregilo acá") {
             KSlider(s.calib.toFloat(), -60f..60f, "${if (s.calib > 0) "+" else ""}${s.calib} ms") { s.calib = it.roundToInt() }
