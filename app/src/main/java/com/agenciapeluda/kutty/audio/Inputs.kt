@@ -154,7 +154,7 @@ object Inputs {
             else if (Store.set.motor && !touching && discActive != "dvs") {
                 val dt = (now - lastNs).coerceIn(0, 50_000_000) / 1e9
                 p += dt / UNIT; vel = 1 / UNIT; lastNs = now; send(now)
-            } else if (touching && now - lastNs > 18_000_000 && vel != 0.0) { vel = 0.0; send(now) }
+            }
             if (lastJog != 0L && now - lastJog > 80_000_000) { lastJog = 0; touching = false; vel = 0.0; hClear(); send(now) }
             if (!touching && !Store.set.motor) lastNs = now
         }
@@ -190,15 +190,20 @@ object Inputs {
      * (tiempo real de cada punto). Manda un solo objetivo al motor, con la velocidad de la
      * regresión de los últimos 15 ms.
      */
+    private val batchPos = DoubleArray(256)
     @Synchronized fun moveDisc(dps: DoubleArray, ts: LongArray, n: Int) {
         if (autoDisc || n <= 0) return
-        for (k in 0 until n) {
+        val cue = cueSec()
+        val m = kotlin.math.min(n, 256)
+        for (k in 0 until m) {
             p = kotlin.math.max(0.0, p + dps[k])   // para atrás frena en el cue
             hPush(ts[k], p)
+            batchPos[k] = cue + p * UNIT
         }
-        lastNs = ts[n - 1]
+        lastNs = ts[m - 1]
         vel = regress(lastNs)
-        send(lastNs)
+        // el motor recibe todos los puntos con su tiempo y reproduce la trayectoria
+        if (!demo) { Engine.pushPoints(ts, batchPos, m, vel * UNIT); Engine.setFader(faderOpen()) }
     }
     private val one = DoubleArray(1)
     private val oneT = LongArray(1)

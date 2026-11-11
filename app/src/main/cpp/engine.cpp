@@ -87,10 +87,17 @@ public:
     std::atomic<uint32_t> cmdHead{0};
     uint32_t cmdTail = 0;
 
-    // disco desde la interfaz (táctil o jog): seqlock
-    std::atomic<uint32_t> seq{0};
-    double uiTgt = 0, uiVel = 0;
-    int64_t uiTime = 0;
+    // disco desde la interfaz (táctil, jog, demo): puntos con su tiempo real.
+    // El motor reproduce esa trayectoria con un retardo chico (el que haga falta
+    // para tener siempre datos), interpolando con Hermite: sin adivinar.
+    struct Pt { int64_t t; double p; double v; };
+    static constexpr int PTN = 512;
+    Pt pts[PTN];
+    std::atomic<uint32_t> ptHead{0};
+    std::atomic<int64_t> ptFloor{0};     // después de un salto, no usar puntos anteriores
+    double gapEnv = 0.012;               // cuánto tarda en llegar el próximo dato (envolvente)
+    std::atomic<double> needD{0.012};
+    double Dsm = 0.012;
     std::atomic<float> uiFader{0};
     std::atomic<int> discSource{0};   // 0 interfaz, 1 timecode
     std::atomic<int> faderSource{0};  // 0 interfaz, 1 corte del timecode
@@ -181,20 +188,31 @@ public:
         cmdHead.store(h + 1, std::memory_order_release);
     }
 
-    // tm: momento real del evento (CLOCK_MONOTONIC en ns); 0 = ahora
-    void setTarget(double tgt, double vel, int64_t tm = 0) {
-        uint32_t s = seq.load(std::memory_order_relaxed);
-        seq.store(s + 1, std::memory_order_release);
-        uiTgt = tgt; uiVel = vel; uiTime = tm > 0 ? tm : nowNs();
-        seq.store(s + 2, std::memory_order_release);
-    }
-    void readTarget(double& t, double& v, int64_t& tm) {
-        for (int i = 0; i < 8; i++) {
-            uint32_t a = seq.load(std::memory_order_acquire);
-            if (a & 1) continue;
-            t = uiTgt; v = uiVel; tm = uiTime;
-            if (seq.load(std::memory_order_acquire) == a) return;
+    // Un solo productor a la vez (Kotlin lo serializa). t en ns de CLOCK_MONOTONIC; 0 = ahora.
+    void pushPts(const int64_t* ts, const double* ps, int n, double vel) {
+        const int64_t now = nowNs();
+        uint32_t h = ptHead.load(std::memory_order_relaxed);
+        int64_t newest = h ? pts[(h - 1) % PTN].t : 0;
+        if (newest > 0) {
+            const double gap = (now - newest) / 1e9;   // edad del último dato cuando llega el siguiente
+            if (gap > 0 && gap < 0.06) gapEnv = std::max(gap, gapEnv * 0.99);
+            double d = gapEnv + 0.002; if (d < 0.003) d = 0.003; if (d > 0.05) d = 0.05;
+            needD.store(d, std::memory_order_relaxed);
         }
+        for (int k = 0; k < n; k++) {
+            int64_t t = ts[k] > 0 ? ts[k] : now;
+            if (t > now) t = now;
+            if (h && t <= newest) { pts[(h - 1) % PTN].p = ps[k]; pts[(h - 1) % PTN].v = vel; continue; }   // mismo instante: se pisa
+            pts[h % PTN] = {t, ps[k], vel};
+            h++; newest = t;
+        }
+        ptHead.store(h, std::memory_order_release);
+    }
+    void setTarget(double tgt, double vel, int64_t tm = 0) { pushPts(&tm, &tgt, 1, vel); }
+    void jumpTo(double p) {
+        const int64_t now = nowNs();
+        ptFloor.store(now, std::memory_order_relaxed);
+        int64_t t = now; pushPts(&t, &p, 1, 0);
     }
 
     void swapBuf(std::atomic<Buf*>& slot, Buf* b) {
@@ -358,9 +376,23 @@ public:
         double tgt = 0, vel = 0; int64_t tm = tNow;
         const bool dvs = discSource.load() == 1;
         const double cueS = cue.load();
+        // copia de los últimos puntos para este bloque
+        static constexpr int SN = 64;
+        Pt sp[SN]; int sn = 0;
         if (dvs) {
             tgt = cueS + dvsPos.load() - dvsZero.load(); vel = dvsSpeed.load(); tm = dvsTime.load();
-        } else readTarget(tgt, vel, tm);
+        } else {
+            const uint32_t h = ptHead.load(std::memory_order_acquire);
+            const int64_t floorT = ptFloor.load(std::memory_order_relaxed);
+            const uint32_t m = h < (uint32_t)SN ? h : (uint32_t)SN;
+            for (uint32_t j = 0; j < m; j++) { const Pt& q = pts[(h - m + j) % PTN]; if (q.t >= floorT) sp[sn++] = q; }
+            // el retardo se mueve despacio (si no, cambiaría la afinación)
+            const double want = needD.load(std::memory_order_relaxed);
+            const double maxStep = 0.05 * n / sr;
+            Dsm += std::max(-maxStep, std::min(maxStep, want - Dsm));
+        }
+        const int64_t Dns = (int64_t)(Dsm * 1e9);
+        int cur = 0;
         const bool cut = faderSource.load() == 1;
         const float fOpen = cut ? (dvsSignal.load() ? 1.f : 0.f) : uiFader.load();
         const float bv = beatVol.load(), sv = scratchVol.load();
@@ -369,10 +401,8 @@ public:
         const double kSp = 1.0 - std::exp(-1.0 / (0.003 * sr));
         const float kRel = 1.f - std::exp(-1.f / (0.08f * sr));
         const double dts = 1.0 / sr;
-        // seguidor críticamente amortiguado: ω = 180 rad/s (≈ 11 ms de respuesta)
-        constexpr double W = 180.0, W2 = W * W;
-        // extrapolación: 15 ms con la velocidad del evento y después se apaga en 20 ms
-        constexpr double H1 = 0.015, HL = 0.020;
+        // seguidor críticamente amortiguado: ω = 150 rad/s
+        constexpr double W = 150.0, W2 = W * W;
         constexpr float LIM = 0.89f;  // -1 dBFS
         const double dcR = std::exp(-2.0 * M_PI * 20.0 / sr);   // pasaaltos de 20 Hz
         const bool rec = recState.load(std::memory_order_acquire) == 1;
@@ -407,13 +437,38 @@ public:
                 if (!beatLoop && beatPos * sr >= len) beatOn = false;
             }
             // el disco: un resorte críticamente amortiguado que sigue posición y velocidad
-            double dt = (double)(tNow - tm) / 1e9 + (double)i / sr;
-            if (dt < 0) dt = 0;
-            double ext, vt;
-            if (dt <= H1) { ext = dt; vt = vel; }
-            else if (dt < H1 + HL) { const double u = dt - H1; ext = H1 + u - u * u / (2 * HL); vt = vel * (1 - u / HL); }
-            else { ext = H1 + HL / 2; vt = 0; }
-            const double xt = tgt + vel * ext;
+            double xt, vt;
+            if (dvs) {
+                double dt = (double)(tNow - tm) / 1e9 + (double)i / sr;
+                if (dt < 0) dt = 0; if (dt > 0.03) dt = 0.03;
+                xt = tgt + vel * dt; vt = vel;
+            } else if (sn == 0) { xt = pos; vt = 0; }
+            else {
+                const int64_t qt = tNow + (int64_t)((double)i * 1e9 / sr) - Dns;
+                if (sn == 1 || qt <= sp[0].t) { const Pt& q = qt <= sp[0].t ? sp[0] : sp[sn - 1]; xt = q.p; vt = 0; }
+                else if (qt >= sp[sn - 1].t) {
+                    // llegó tarde el dato: se sigue un poquito con la última velocidad y se frena
+                    const double over = (qt - sp[sn - 1].t) / 1e9;
+                    xt = sp[sn - 1].p + sp[sn - 1].v * std::min(over, 0.008); vt = over < 0.008 ? sp[sn - 1].v : 0;
+                } else {
+                    while (cur + 2 < sn && sp[cur + 1].t <= qt) cur++;
+                    while (cur > 0 && sp[cur].t > qt) cur--;
+                    const Pt& a = sp[cur]; const Pt& b = sp[cur + 1];
+                    const double hh = (b.t - a.t) / 1e9;
+                    const double lin = (b.p - a.p) / hh;
+                    auto tan = [&](int k) {
+                        if (k <= 0 || k >= sn - 1) return lin;
+                        double m = (sp[k + 1].p - sp[k - 1].p) / ((sp[k + 1].t - sp[k - 1].t) / 1e9);
+                        if (m > 40) m = 40; else if (m < -40) m = -40;
+                        return m;
+                    };
+                    const double m0 = tan(cur), m1 = tan(cur + 1);
+                    const double u = (qt - a.t) / 1e9 / hh, u2 = u * u, u3 = u2 * u;
+                    xt = (2 * u3 - 3 * u2 + 1) * a.p + (u3 - 2 * u2 + u) * hh * m0 + (-2 * u3 + 3 * u2) * b.p + (u3 - u2) * hh * m1;
+                    vt = ((6 * u2 - 6 * u) * a.p + (3 * u2 - 4 * u + 1) * hh * m0 + (-6 * u2 + 6 * u) * b.p + (3 * u2 - 2 * u) * hh * m1) / hh;
+                    if (vt > 40) vt = 40; else if (vt < -40) vt = -40;
+                }
+            }
             dv += (W2 * (xt - pos) + 2 * W * (vt - dv)) * dts;
             if (dv > 16) dv = 16; else if (dv < -16) dv = -16;
             pos += dv * dts;
@@ -565,7 +620,15 @@ JNIEXPORT void JNICALL JF(nRate)(JNIEnv*, jobject, jlong frame, jdouble rate) { 
 JNIEXPORT void JNICALL JF(nClick)(JNIEnv*, jobject, jlong frame, jboolean accent) { Cmd c; c.type = C_CLICK; c.frame = frame; c.flag = accent ? 1 : 0; E->push(c); }
 JNIEXPORT void JNICALL JF(nPreview)(JNIEnv*, jobject, jdouble start, jdouble dur) { Cmd c; c.type = C_PREVIEW; c.a = start; c.b = dur; E->push(c); }
 JNIEXPORT void JNICALL JF(nStopPreview)(JNIEnv*, jobject) { Cmd c; c.type = C_STOP_PREVIEW; E->push(c); }
-JNIEXPORT void JNICALL JF(nJump)(JNIEnv*, jobject, jdouble p) { Cmd c; c.type = C_JUMP; c.a = p; E->push(c); E->setTarget(p, 0); }
+JNIEXPORT void JNICALL JF(nJump)(JNIEnv*, jobject, jdouble p) { Cmd c; c.type = C_JUMP; c.a = p; E->push(c); E->jumpTo(p); }
+JNIEXPORT void JNICALL JF(nPushPoints)(JNIEnv* env, jobject, jlongArray ts, jdoubleArray ps, jint n, jdouble vel) {
+    if (!E || n <= 0) return;
+    int64_t t[256]; double p[256];
+    if (n > 256) n = 256;
+    env->GetLongArrayRegion(ts, 0, n, reinterpret_cast<jlong*>(t));
+    env->GetDoubleArrayRegion(ps, 0, n, p);
+    E->pushPts(t, p, n, vel);
+}
 JNIEXPORT jlong JNICALL JF(nWritten)(JNIEnv*, jobject) { return E ? (jlong)E->written.load() : 0; }
 JNIEXPORT jdouble JNICALL JF(nHeard)(JNIEnv*, jobject) { return E ? E->heardFrame() : 0; }
 JNIEXPORT jdouble JNICALL JF(nLatency)(JNIEnv*, jobject) { return E ? E->latencyFrames() : 0; }

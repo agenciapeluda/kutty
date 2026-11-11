@@ -28,6 +28,9 @@ object Engine {
     external fun nSetBeat(interleaved: FloatArray)
     external fun nSetTarget(t: Double, v: Double)
     external fun nSetTargetAt(t: Double, v: Double, tNs: Long)
+    external fun nPushPoints(ts: LongArray, pos: DoubleArray, n: Int, vel: Double)
+    /** Todos los puntos de una tanda (posición en segundos de sonido, tiempo real en ns). */
+    fun pushPoints(ts: LongArray, pos: DoubleArray, n: Int, vel: Double) = synchronized(lock) { nPushPoints(ts, pos, n, vel) }
     external fun nSetEnd(end: Double)
     external fun nRecStart(seconds: Double): Int
     external fun nRecProgress(): Float
