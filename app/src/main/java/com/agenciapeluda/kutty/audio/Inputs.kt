@@ -32,8 +32,42 @@ object Inputs {
     @Volatile var p = 0.0
     @Volatile var vel = 0.0
     @Volatile var touching = false
-    private var lastT = 0L
+    private var lastNs = 0L          // último evento del disco (ns, reloj de System.nanoTime)
     @Volatile var demo = false
+
+    // historia reciente del disco para estimar la velocidad por regresión
+    private const val HN = 64
+    private const val VEL_WIN = 15_000_000L   // 15 ms
+    private val hT = LongArray(HN)
+    private val hP = DoubleArray(HN)
+    private var hN = 0
+    private var hHead = 0
+    private fun hClear() { hN = 0; hHead = 0 }
+    private fun hPush(t: Long, pos: Double) { hT[hHead] = t; hP[hHead] = pos; hHead = (hHead + 1) % HN; if (hN < HN) hN++ }
+
+    /** Pendiente (unidades/s) de los puntos de los últimos 15 ms. */
+    private fun regress(tEnd: Long): Double {
+        var sx = 0.0; var sy = 0.0; var sxx = 0.0; var sxy = 0.0; var m = 0
+        for (j in 0 until hN) {
+            val i = (hHead - 1 - j + HN) % HN
+            val age = tEnd - hT[i]
+            if (age > VEL_WIN && m >= 2) break
+            val x = -age / 1e9; val y = hP[i]
+            sx += x; sy += y; sxx += x * x; sxy += x * y; m++
+            if (age > VEL_WIN) break   // uno de afuera de la ventana si hacía falta para tener dos
+        }
+        if (m < 2) return 0.0
+        val d = m * sxx - sx * sx
+        if (d <= 1e-14) return vel
+        return (m * sxy - sx * sy) / d
+    }
+
+    // tanda de puntos de un evento táctil (se arma en el hilo principal)
+    val batchDp = DoubleArray(256)
+    val batchT = LongArray(256)
+
+    // modo teléfono sin controladora: el fader es el botón de corte
+    @Volatile var phoneMode = false
 
     // fader
     @Volatile var fv = 0f            // posición del fader en pantalla 0..1
@@ -81,7 +115,8 @@ object Inputs {
                 if (s.hamster) !o else o
             }
             "dvs" -> dvsState[2] > 0.5f
-            else -> if (s.faderMode == "pad") padOpen else if (s.faderMode == "cut") !padOpen else {
+            else -> if (phoneMode) (if (s.holdCuts) !padOpen else padOpen)
+            else if (s.faderMode == "pad") padOpen else if (s.faderMode == "cut") !padOpen else {
                 val v = if (s.hamster) 1f - fv else fv
                 v >= s.cutIn
             }
@@ -113,48 +148,67 @@ object Inputs {
             Engine.nDvsState(dvsState)
             if (dvsState[2] > 0.5f) lastSignal = SystemClock.uptimeMillis()
         }
-        val now = SystemClock.uptimeMillis()
-        if (!demo) {
+        val now = System.nanoTime()
+        if (!demo) synchronized(this) {
             if (autoDisc) { /* el disco lo mueve la app */ }
             else if (Store.set.motor && !touching && discActive != "dvs") {
-                val dt = (now - lastT).coerceIn(0, 50) / 1000.0
-                p += dt / UNIT; vel = 1 / UNIT; lastT = now; send()
-            } else if (touching && now - lastT > 18 && vel != 0.0) { vel = 0.0; send() }
-            if (lastJog != 0L && now - lastJog > 80) { lastJog = 0; touching = false; vel = 0.0; send() }
-            if (!touching && !Store.set.motor) lastT = now
+                val dt = (now - lastNs).coerceIn(0, 50_000_000) / 1e9
+                p += dt / UNIT; vel = 1 / UNIT; lastNs = now; send(now)
+            } else if (touching && now - lastNs > 18_000_000 && vel != 0.0) { vel = 0.0; send(now) }
+            if (lastJog != 0L && now - lastJog > 80_000_000) { lastJog = 0; touching = false; vel = 0.0; hClear(); send(now) }
+            if (!touching && !Store.set.motor) lastNs = now
         }
         resolve()
         if (!demo && discActive != "dvs") Engine.setFader(faderOpen())
     }
 
-    fun send() {
+    fun send() { send(System.nanoTime()) }
+    private fun send(tNs: Long) {
         if (demo) return
-        if (!autoDisc) Engine.setTarget(cueSec() + p * UNIT, vel * UNIT)
+        if (!autoDisc) Engine.setTarget(cueSec() + p * UNIT, vel * UNIT, tNs)
         Engine.setFader(faderOpen())
     }
 
-    /** Posición del fader para dibujar (0..1, 1 = abierto del lado del scratch), sea cual sea la fuente. */
-    fun faderShown(): Float {
+    /**
+     * Posición física del fader para dibujar (0 = izquierda, 1 = derecha), sea cual sea la fuente.
+     * Abierto queda a la derecha en normal y a la izquierda en hamster.
+     */
+    fun faderKnob(): Float {
         val s = Store.set
-        if (autoFader) return if (autoFaderOpen) 1f else 0f
+        val openRight = !s.hamster
+        fun side(open: Boolean) = if (open == openRight) 1f else 0f
+        if (autoFader) return side(autoFaderOpen)
         return when (faderActive) {
-            "midi" -> { val x = midiFader.coerceIn(0f, 1f); if (s.xfaderSide == "left") 1f - x else x }
-            "dvs" -> if (dvsState[2] > 0.5f) 1f else 0f
-            else -> if (s.faderMode != "slide") (if (faderOpen()) 1f else 0f) else (if (s.hamster) 1f - fv else fv)
+            "midi" -> midiFader.coerceIn(0f, 1f)
+            "dvs" -> side(dvsState[2] > 0.5f)
+            else -> if (s.faderMode == "slide" && !phoneMode) fv else side(faderOpen())
         }
     }
 
-    /** dp en unidades; t en milisegundos (uptime). */
-    fun moveDisc(dp: Double, t: Long) {
-        if (autoDisc) return
-        val dt = ((t - lastT).coerceAtLeast(1)) / 1000.0
-        p += dp
-        vel = vel * 0.5 + (dp / dt) * 0.5
-        lastT = t
-        send()
+    /**
+     * Una tanda de movimiento (todos los puntos de un evento): dps en unidades, ts en ns
+     * (tiempo real de cada punto). Manda un solo objetivo al motor, con la velocidad de la
+     * regresión de los últimos 15 ms.
+     */
+    @Synchronized fun moveDisc(dps: DoubleArray, ts: LongArray, n: Int) {
+        if (autoDisc || n <= 0) return
+        for (k in 0 until n) {
+            p = kotlin.math.max(0.0, p + dps[k])   // para atrás frena en el cue
+            hPush(ts[k], p)
+        }
+        lastNs = ts[n - 1]
+        vel = regress(lastNs)
+        send(lastNs)
     }
+    private val one = DoubleArray(1)
+    private val oneT = LongArray(1)
+    @Synchronized fun moveDisc(dp: Double, tNs: Long) { one[0] = dp; oneT[0] = tNs; moveDisc(one, oneT, 1) }
 
-    fun touchDisc(down: Boolean, t: Long) { touching = down; vel = 0.0; lastT = t; send() }
+    @Synchronized fun touchDisc(down: Boolean, tNs: Long) {
+        touching = down; vel = 0.0; lastNs = tNs; hClear()
+        if (down) hPush(tNs, p)
+        send(tNs)
+    }
     fun setFaderPos(v: Float) { fv = v.coerceIn(0f, 1f); Engine.setFader(faderOpen()) }
     fun setPad(open: Boolean) { padOpen = open; Engine.setFader(faderOpen()) }
 
@@ -211,7 +265,11 @@ object Inputs {
         private val isRev1 = name.contains("REV1", true) || name.contains("DDJ", true)
         private val isMixtour = name.contains("Mixtour", true)
         private val buf = IntArray(3); private var n = 0
+        private var ts = 0L
         override fun onSend(msg: ByteArray, offset: Int, count: Int, timestamp: Long) {
+            // el sello del mensaje está en el reloj de System.nanoTime
+            val now = System.nanoTime()
+            ts = if (timestamp > 0 && timestamp <= now && now - timestamp < 200_000_000) timestamp else now
             for (i in offset until offset + count) {
                 val b = msg[i].toInt() and 0xff
                 if (b >= 0xf8) continue
@@ -232,7 +290,7 @@ object Inputs {
                 }
                 return
             }
-            val t = SystemClock.uptimeMillis()
+            val t = ts
             monitor(name, st, d1, d2)
             val ch = st and 0x0f
             // DDJ de Pioneer (REV1): jog en CC 0x21/0x22 (0x23/0x29 con SHIFT) de los canales de deck,
@@ -245,7 +303,7 @@ object Inputs {
                 }
                 if ((kind == 0x90 || kind == 0x80) && ch <= 3 && d1 == 0x36) {
                     val on = kind == 0x90 && d2 > 0
-                    touching = on; lastJog = if (on) t else 0; if (!on) { vel = 0.0; send() }; return
+                    lastJog = if (on) t else 0; touchDisc(on, t); return
                 }
                 if (kind == 0xb0 && d1 == 0x3f) { lsb = d2; return }
                 if (kind == 0xb0 && d1 == 0x1f) { midiFader = ((d2 shl 7) or lsb) / 16383f; seenXfader(); Engine.setFader(faderOpen()); return }
@@ -257,7 +315,7 @@ object Inputs {
         private fun jog(steps: Int, t: Long) {
             if (!hasJog) Handler(Looper.getMainLooper()).post { hasJog = true; resolve() }
             if (discActive != "midi" || demo) return
-            if (!touching) { touching = true }
+            if (!touching) touchDisc(true, t)
             lastJog = t
             moveDisc(steps.toDouble() / Store.set.jogSteps * (REV / UNIT) * Store.set.sens, t)
         }

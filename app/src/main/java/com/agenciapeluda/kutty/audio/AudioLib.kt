@@ -22,8 +22,10 @@ class Peaks(val rate: Int, val low: FloatArray, val mid: FloatArray, val high: F
     val len get() = low.size
 }
 
-class SoundItem(val key: String, val name: String, val data: FloatArray, val sr: Int, var cue: Double, val peaks: Peaks, val builtin: Boolean) {
+class SoundItem(val key: String, val name: String, val data: FloatArray, val sr: Int, var cue: Double, val peaks: Peaks, val builtin: Boolean, end: Double = -1.0) {
     val duration get() = data.size.toDouble() / sr
+    /** Fin del trim: pasado el fin, silencio. */
+    var end: Double = if (end > 0) end.coerceAtMost(duration) else duration
 }
 
 class BeatItem(
@@ -98,6 +100,26 @@ object AudioLib {
         val th = pk * 0.12f
         for (i in data.indices) if (abs(data[i]) > th) return max(0.0, i.toDouble() / sr - 0.004)
         return 0.0
+    }
+
+    /** Fin de la frase: donde, después del cue, la envolvente queda baja al menos 150 ms. */
+    fun autoEnd(data: FloatArray, sr: Int, cue: Double): Double {
+        val win = max(1, sr / 100)                    // ventanas de 10 ms
+        val n = data.size / win
+        if (n < 2) return data.size.toDouble() / sr
+        val env = FloatArray(n)
+        for (k in 0 until n) { var m = 0f; for (j in k * win until (k + 1) * win) m = max(m, abs(data[j])); env[k] = m }
+        val k0 = (cue * 100).toInt().coerceIn(0, n - 1)
+        var pk = 0f; var kp = k0
+        for (k in k0 until n) if (env[k] > pk) { pk = env[k]; kp = k }
+        if (pk <= 0f) return data.size.toDouble() / sr
+        val th = pk * 0.06f
+        var quiet = 0
+        for (k in kp until n) {
+            if (env[k] < th) { quiet++; if (quiet >= 15) return max(cue + 0.05, (k - quiet + 1) * 0.01 + 0.03) }
+            else quiet = 0
+        }
+        return data.size.toDouble() / sr
     }
 
     fun autoDownbeat(pk: Peaks): Double {

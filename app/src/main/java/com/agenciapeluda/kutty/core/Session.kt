@@ -98,8 +98,9 @@ object Session {
         val beats: Double
         when {
             demoOnly -> {
-                beats = max(8, t.beats * 2).toDouble()
-                var b = 0.0; while (b < beats) { list += Techniques.timeStrokes(t.strokes, b, true); b += t.beats }
+                // Escuchar: dos compases al BPM elegido, plato y fader automáticos
+                beats = 8.0
+                var b = 0.0; while (b < beats) { list += Techniques.timeStrokes(t.strokes, b, true).filter { it.b0 < beats }; b += t.beats }
             }
             mode == "aprender" -> {
                 beats = unit * 4
@@ -178,7 +179,8 @@ object Session {
             for (i in 0 until n) {
                 val p = ((dPos[i] - cue) / UNIT).toFloat()
                 if (Inputs.discActive == "dvs" && !Inputs.demo) Inputs.p = p.toDouble()
-                if (Inputs.demo || ended) continue
+                // en Escuchar el trazo de la demo dibuja la guía
+                if ((Inputs.demo && !demoOnly) || ended) continue
                 val b = if (running) beatAt(dFrames[i] - calibFrames) else dFrames[i] / sr * bpm / 60.0
                 samples.add(b, p, dF[i])
             }

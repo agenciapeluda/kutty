@@ -171,6 +171,36 @@ fun DrawScope.drawDisc(p: Double, open: Boolean) {
     drawCircle(Color.White, 4.5f * density, Offset(c.x + (cos(a) * ringR).toFloat(), c.y + (sin(a) * ringR).toFloat()))
 }
 
+/**
+ * Medio vinilo pegado al borde: el centro queda fuera de pantalla y el radio es grande.
+ * base: ángulo (grados) donde está la marca del cue con el disco en el cue (0 = derecha, 180 = izquierda).
+ */
+fun DrawScope.drawHalfDisc(p: Double, open: Boolean, c: Offset, r: Float, base: Float) {
+    drawCircle(C.dark, r, c)
+    var k = r * 0.4f
+    while (k < r - 6 * density) { drawCircle(C.divider, k, c, style = Stroke(1f)); k += 6 * density }
+    drawCircle(C.border, r - 1.5f * density, c, style = Stroke(3 * density))
+    val ang = (p * UNIT / REV * 360).toFloat()
+    rotate(base + ang, c) {
+        drawCircle(C.accent, r * 0.36f, c)
+        drawCircle(Color.White, r * 0.24f, c, style = Stroke(max(2f, r * 0.02f)))
+        // marcas cada 30° para ver el giro; la del cue, gruesa
+        for (i in 0 until 12) {
+            val a = i * PI / 6
+            val ca = cos(a).toFloat(); val sa = sin(a).toFloat()
+            val r0 = if (i == 0) r * 0.40f else r * 0.78f
+            val col = if (i == 0) (if (open) Color.White else C.dim) else C.tick
+            drawLine(col, Offset(c.x + ca * r0, c.y + sa * r0), Offset(c.x + ca * (r - 10 * density), c.y + sa * (r - 10 * density)), (if (i == 0) 5f else 2f) * density, StrokeCap.Round)
+        }
+    }
+    // anillo: distancia al cue, en el borde visible
+    val off = (p * UNIT / REV).coerceIn(-1.0, 1.0)
+    val ringR = r - 4 * density
+    drawArc(if (open) C.accentText else C.tick, base, (off * 360).toFloat(), false, Offset(c.x - ringR, c.y - ringR), Size(ringR * 2, ringR * 2), style = Stroke(5 * density, cap = StrokeCap.Round))
+    val cr = (base / 180f * PI)
+    drawCircle(C.cue, 4.5f * density, Offset(c.x + (cos(cr) * ringR).toFloat(), c.y + (sin(cr) * ringR).toFloat()))
+}
+
 /** Mini gráfico de una técnica (tarjetas y detalle). */
 fun DrawScope.drawMiniTtm(t: Tech, cycles: Int = if (t.beats >= 8) 1 else 2) {
     val beats = t.beats * cycles

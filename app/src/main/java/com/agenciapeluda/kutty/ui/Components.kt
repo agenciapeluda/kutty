@@ -1,6 +1,20 @@
 package com.agenciapeluda.kutty.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.remember
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -113,6 +127,49 @@ fun Stat(label: String, value: String, sub: String? = null, modifier: Modifier =
             Text(label, style = T.small)
             Text(value, style = T.num.copy(fontSize = 22.sp))
             if (sub != null) Text(sub, style = T.tiny)
+        }
+    }
+}
+
+val R18 = RoundedCornerShape(18.dp)
+
+/** Cruz de cerrar. */
+@Composable
+fun CloseX(onClick: () -> Unit) {
+    Box(Modifier.size(44.dp).clip(CircleShape).clickable(onClick = onClick), contentAlignment = Alignment.Center) {
+        Canvas(Modifier.size(14.dp)) {
+            val w = 2.2f * density
+            drawLine(C.text2, Offset(0f, 0f), Offset(size.width, size.height), w, StrokeCap.Round)
+            drawLine(C.text2, Offset(size.width, 0f), Offset(0f, size.height), w, StrokeCap.Round)
+        }
+    }
+}
+
+/** Barra de título de un modal: título, subtítulo opcional y X. */
+@Composable
+fun ModalBar(title: String, sub: String? = null, onClose: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 6.dp, top = 6.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            if (sub != null) Text(sub, style = T.small, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = T.h1.copy(fontSize = 18.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        CloseX(onClose)
+    }
+    Box(Modifier.fillMaxWidth().height(1.dp).background(C.divider))
+}
+
+/**
+ * Todo modal: barra con título y X; cierra también tocando afuera o con volver.
+ */
+@Composable
+fun Modal(title: String, onClose: () -> Unit, sub: String? = null, maxWidth: Dp = 720.dp, content: @Composable ColumnScope.() -> Unit) {
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        val none = remember { MutableInteractionSource() }
+        Box(Modifier.fillMaxSize().clickable(none, null, onClick = onClose).padding(16.dp), contentAlignment = Alignment.Center) {
+            Column(Modifier.widthIn(max = maxWidth).fillMaxWidth().clip(R18).background(C.panel).border(1.dp, C.border, R18).clickable(none, null) {}) {
+                ModalBar(title, sub, onClose)
+                Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(20.dp), content = content)
+            }
         }
     }
 }

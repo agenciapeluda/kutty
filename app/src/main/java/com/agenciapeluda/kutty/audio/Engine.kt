@@ -16,6 +16,8 @@ object Engine {
 
     private val lock = Any()
     fun setTarget(posSec: Double, velSec: Double) = synchronized(lock) { nSetTarget(posSec, velSec) }
+    /** [tNs]: momento real del evento, en el reloj de System.nanoTime (CLOCK_MONOTONIC). */
+    fun setTarget(posSec: Double, velSec: Double, tNs: Long) = synchronized(lock) { nSetTargetAt(posSec, velSec, tNs) }
     fun setFader(open: Boolean) = nSetFader(if (open) 1f else 0f)
 
     external fun nStart(deviceId: Int, channels: Int): Int
@@ -25,6 +27,11 @@ object Engine {
     external fun nSetSample(data: FloatArray)
     external fun nSetBeat(interleaved: FloatArray)
     external fun nSetTarget(t: Double, v: Double)
+    external fun nSetTargetAt(t: Double, v: Double, tNs: Long)
+    external fun nSetEnd(end: Double)
+    external fun nRecStart(seconds: Double): Int
+    external fun nRecProgress(): Float
+    external fun nRecFetch(out: FloatArray): Int
     external fun nSetFader(v: Float)
     external fun nSetSources(disc: Int, fader: Int)
     external fun nSetCue(cue: Double)

@@ -233,9 +233,12 @@ private fun DetailSheet(t: Tech) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val best = Store.best[t.id]
     ModalBottomSheet(onDismissRequest = { Nav.detail = null }, sheetState = state, containerColor = C.panel, scrimColor = C.bg.copy(alpha = 0.6f)) {
+        Row(Modifier.fillMaxWidth().padding(start = 18.dp, end = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(t.name, style = T.h1, maxLines = 1, modifier = Modifier.weight(1f))
+            CloseX { Nav.detail = null }
+        }
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 18.dp).padding(bottom = 24.dp)) {
-            Text(t.name, style = T.h1)
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(4.dp))
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Tag(t.family); Text("Nivel ${t.level}", style = T.monoS.copy(color = C.cue)); Text("${t.bpm} BPM", style = T.monoS); Text(t.rhythm, style = T.small)
             }
@@ -353,9 +356,8 @@ private fun Toast() {
 @Composable
 private fun CrashReport(text: String) {
     val clip = androidx.compose.ui.platform.LocalClipboardManager.current
-    Box(Modifier.fillMaxSize().background(C.bg.copy(alpha = 0.85f)).clickable(enabled = false) {}, contentAlignment = Alignment.Center) {
-        Column(Modifier.padding(20.dp).clip(RoundedCornerShape(18.dp)).background(C.panel).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("La app se cerró la última vez", style = T.h2.copy(color = C.text))
+    Modal("La app se cerró la última vez", { CrashLog.dismiss() }, maxWidth = 640.dp) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Copiá el detalle y pasáselo a quien la está armando.", style = T.body.copy(color = C.text2))
             Box(Modifier.fillMaxWidth().height(220.dp).clip(RoundedCornerShape(10.dp)).background(C.dark).verticalScroll(rememberScrollState()).padding(10.dp)) {
                 Text(text, style = T.body.copy(fontFamily = Mono, fontSize = 11.sp, color = C.text2))

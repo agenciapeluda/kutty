@@ -1,9 +1,14 @@
 // Kutty · motor de audio
 //  - salida Oboe de baja latencia: beat (loop o libre, con velocidad), sonido a
 //    scratchear que sigue al disco, fader, metrónomo y preescucha
+//  - el disco: seguidor de velocidad críticamente amortiguado (inercia, sin
+//    escalones), lectura Hermite de 4 puntos sobre copias filtradas del sonido
+//    que se eligen según la velocidad del plato (antialias), limitador suave
+//  - diagnóstico: graba 10 s de la salida
 //  - entrada opcional (DVS): decodifica el timecode en modo relativo leyendo la
 //    fase de la portadora estéreo en cuadratura
 //  - captura posición y fader cada 32 cuadros para la puntuación
+#include <algorithm>
 #include <cstring>
 #include <oboe/Oboe.h>
 #include <jni.h>
@@ -29,6 +34,38 @@ struct Buf {
     int64_t frames() const { return int64_t(data.size()) / channels; }
 };
 
+// Sonido a scratchear: el original y tres copias pasabajos de fase cero
+// (para velocidades ×2, ×4 y ×8). Al acelerar el plato se pasa de una a otra.
+static constexpr int LV = 4;
+struct Smp {
+    std::vector<float> lv[LV];
+    int64_t frames() const { return int64_t(lv[0].size()); }
+};
+
+// Butterworth de 2º orden ida y vuelta (fase cero, 4º orden en magnitud)
+static void lowpassZeroPhase(const std::vector<float>& in, std::vector<float>& out, double fc, double sr) {
+    const double w = 2.0 * M_PI * fc / sr, c = std::cos(w), al = std::sin(w) / (2.0 * 0.7071067811865476), a0 = 1 + al;
+    const double b0 = (1 - c) / 2 / a0, b1 = (1 - c) / a0, b2 = b0, a1 = -2 * c / a0, a2 = (1 - al) / a0;
+    const size_t n = in.size();
+    std::vector<double> t(n);
+    double x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (size_t i = 0; i < n; i++) { double x = in[i], y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = x; y2 = y1; y1 = y; t[i] = y; }
+    x1 = x2 = y1 = y2 = 0;
+    out.resize(n);
+    for (size_t k = n; k-- > 0;) { double x = t[k], y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2; x2 = x1; x1 = x; y2 = y1; y1 = y; out[k] = (float)y; }
+}
+
+// Hermite de 4 puntos (Catmull-Rom); fuera del sonido, silencio
+static inline float hermite(const float* d, int64_t n, double x) {
+    const int64_t k = (int64_t)std::floor(x);
+    if (k < -2 || k >= n) return 0.f;
+    auto at = [&](int64_t i) { return (i >= 0 && i < n) ? d[i] : 0.f; };
+    const float t = float(x - (double)k);
+    const float xm = at(k - 1), x0 = at(k), x1 = at(k + 1), x2 = at(k + 2);
+    const float c1 = 0.5f * (x1 - xm), c2 = xm - 2.5f * x0 + 2.f * x1 - 0.5f * x2, c3 = 0.5f * (x2 - xm) + 1.5f * (x0 - x1);
+    return ((c3 * t + c2) * t + c1) * t + x0;
+}
+
 enum CmdType { C_START_BEAT, C_STOP_BEAT, C_RATE, C_CLICK, C_PREVIEW, C_STOP_PREVIEW, C_JUMP };
 struct Cmd {
     int type = 0;
@@ -40,9 +77,10 @@ struct Cmd {
 class Engine : public oboe::AudioStreamDataCallback, public oboe::AudioStreamErrorCallback {
 public:
     // ---- estado compartido ----
-    std::atomic<Buf*> sample{nullptr};
+    std::atomic<Smp*> sample{nullptr};
     std::atomic<Buf*> beat{nullptr};
     std::vector<Buf*> graveyard;
+    std::vector<Smp*> smpGraveyard;
     std::mutex cmdMutex;
     static constexpr int CMDN = 1024;
     Cmd cmds[CMDN];
@@ -57,6 +95,7 @@ public:
     std::atomic<int> discSource{0};   // 0 interfaz, 1 timecode
     std::atomic<int> faderSource{0};  // 0 interfaz, 1 corte del timecode
     std::atomic<double> cue{0.03};
+    std::atomic<double> endSec{1e9};   // fin del trim: pasado el fin, silencio
     std::atomic<float> beatVol{0.75f}, scratchVol{0.9f};
 
     // DVS
@@ -93,6 +132,15 @@ public:
     int inDevice = 0;
     std::atomic<int64_t> written{0};
     double pos = 0.03, gain = 0;
+    double dv = 0;        // velocidad del disco (segundos de sonido por segundo)
+    double spSm = 0;      // |velocidad| suavizada, para el antialias
+    float limG = 1.f;     // ganancia del limitador
+
+    // diagnóstico: 10 s de la salida
+    std::atomic<int> recState{0};      // 0 nada, 1 grabando, 2 listo
+    std::vector<float> recBuf;
+    std::atomic<int64_t> recPos{0};
+    int64_t recLen = 0;
     bool beatOn = false;
     int64_t beatStartFrame = 0;
     double beatPos = 0, beatRate = 1, beatLoopStart = 0, beatLoopLen = 0;
@@ -131,10 +179,11 @@ public:
         cmdHead.store(h + 1, std::memory_order_release);
     }
 
-    void setTarget(double tgt, double vel) {
+    // tm: momento real del evento (CLOCK_MONOTONIC en ns); 0 = ahora
+    void setTarget(double tgt, double vel, int64_t tm = 0) {
         uint32_t s = seq.load(std::memory_order_relaxed);
         seq.store(s + 1, std::memory_order_release);
-        uiTgt = tgt; uiVel = vel; uiTime = nowNs();
+        uiTgt = tgt; uiVel = vel; uiTime = tm > 0 ? tm : nowNs();
         seq.store(s + 2, std::memory_order_release);
     }
     void readTarget(double& t, double& v, int64_t& tm) {
@@ -150,6 +199,11 @@ public:
         Buf* old = slot.exchange(b);
         if (old) graveyard.push_back(old);
         while (graveyard.size() > 4) { delete graveyard.front(); graveyard.erase(graveyard.begin()); }
+    }
+    void swapSmp(Smp* b) {
+        Smp* old = sample.exchange(b);
+        if (old) smpGraveyard.push_back(old);
+        while (smpGraveyard.size() > 4) { delete smpGraveyard.front(); smpGraveyard.erase(smpGraveyard.begin()); }
     }
 
     // ---- salida ----
@@ -275,24 +329,28 @@ public:
                 }
                 case C_PREVIEW: pvOn = true; pvPos = c.a; pvEnd = c.a + c.b; break;
                 case C_STOP_PREVIEW: pvOn = false; break;
-                case C_JUMP: pos = c.a; break;
+                case C_JUMP: pos = c.a; dv = 0; break;
             }
         }
         (void)f0;
     }
 
-    static inline float readMono(const Buf* b, double sec, int sr) {
-        double x = sec * sr;
-        int64_t k = (int64_t)std::floor(x);
-        if (k < 0 || k + 1 >= b->frames()) return 0.f;
-        float fr = float(x - k);
-        return b->data[k] + (b->data[k + 1] - b->data[k]) * fr;
+    // lectura del sonido: Hermite sobre la copia que corresponde a la velocidad
+    static inline float readSmp(const Smp* b, double sec, int sr, double speed) {
+        const double x = sec * sr;
+        const int64_t n = b->frames();
+        double l = speed > 1.0 ? std::log2(speed) : 0.0;
+        int i0 = (int)l; double fr = l - i0;
+        if (i0 >= LV - 1) { i0 = LV - 1; fr = 0; }
+        float v = hermite(b->lv[i0].data(), n, x);
+        if (fr > 0.001) v += (hermite(b->lv[i0 + 1].data(), n, x) - v) * float(fr);
+        return v;
     }
 
     void renderOut(float* o, int n, int oc) {
         const int64_t f0 = written.load(std::memory_order_relaxed);
         popCmds(f0);
-        Buf* smp = sample.load(std::memory_order_acquire);
+        Smp* smp = sample.load(std::memory_order_acquire);
         Buf* bt = beat.load(std::memory_order_acquire);
         const int64_t tNow = nowNs();
         double tgt = 0, vel = 0; int64_t tm = tNow;
@@ -304,7 +362,17 @@ public:
         const bool cut = faderSource.load() == 1;
         const float fOpen = cut ? (dvsSignal.load() ? 1.f : 0.f) : uiFader.load();
         const float bv = beatVol.load(), sv = scratchVol.load();
-        const double a = 1.0 - std::exp(-1.0 / (0.0025 * sr)), ga = 1.0 - std::exp(-1.0 / (0.0007 * sr));
+        const double endS = endSec.load();
+        const double ga = 1.0 - std::exp(-1.0 / (0.0007 * sr));
+        const double kSp = 1.0 - std::exp(-1.0 / (0.003 * sr));
+        const float kRel = 1.f - std::exp(-1.f / (0.08f * sr));
+        const double dts = 1.0 / sr;
+        // seguidor críticamente amortiguado: ω = 180 rad/s (≈ 11 ms de respuesta)
+        constexpr double W = 180.0, W2 = W * W;
+        // extrapolación: 15 ms con la velocidad del evento y después se apaga en 20 ms
+        constexpr double H1 = 0.015, HL = 0.020;
+        constexpr float LIM = 0.89f;  // -1 dBFS
+        const bool rec = recState.load(std::memory_order_acquire) == 1;
         for (int i = 0; i < n; i++) {
             const int64_t f = f0 + i;
             // cambio de velocidad programado (Desafío)
@@ -335,15 +403,29 @@ public:
                 if (beatLoop && beatLoopLen > 0 && beatPos >= beatLoopStart + beatLoopLen) beatPos -= beatLoopLen;
                 if (!beatLoop && beatPos * sr >= len) beatOn = false;
             }
-            // el disco sigue al objetivo, extrapolando con la velocidad
+            // el disco: un resorte críticamente amortiguado que sigue posición y velocidad
             double dt = (double)(tNow - tm) / 1e9 + (double)i / sr;
-            if (dt < 0) dt = 0; if (dt > 0.03) dt = 0.03;
-            const double pred = tgt + vel * dt;
-            pos += (pred - pos) * a;
+            if (dt < 0) dt = 0;
+            double ext, vt;
+            if (dt <= H1) { ext = dt; vt = vel; }
+            else if (dt < H1 + HL) { const double u = dt - H1; ext = H1 + u - u * u / (2 * HL); vt = vel * (1 - u / HL); }
+            else { ext = H1 + HL / 2; vt = 0; }
+            const double xt = tgt + vel * ext;
+            dv += (W2 * (xt - pos) + 2 * W * (vt - dv)) * dts;
+            if (dv > 16) dv = 16; else if (dv < -16) dv = -16;
+            pos += dv * dts;
+            // para atrás frena en el cue
+            if (pos < cueS) { pos = cueS; if (dv < 0) dv = 0; }
+            spSm += (std::fabs(dv) - spSm) * kSp;
             gain += (fOpen - gain) * ga;
-            float s = smp ? readMono(smp, pos, sr) * float(gain) : 0.f;
+            float s = 0.f;
+            if (smp) {
+                // pasado el fin, silencio (con 3 ms de rampa para que no haga click)
+                double eg = (endS - pos) / 0.003; if (eg > 1) eg = 1; else if (eg < 0) eg = 0;
+                if (eg > 0) s = readSmp(smp, pos, sr, spSm) * float(gain * eg);
+            }
             float pv = 0;
-            if (pvOn && smp) { pv = readMono(smp, pvPos, sr); pvPos += 1.0 / sr; if (pvPos >= pvEnd) pvOn = false; }
+            if (pvOn && smp) { pv = hermite(smp->lv[0].data(), smp->frames(), pvPos * sr); pvPos += 1.0 / sr; if (pvPos >= pvEnd) pvOn = false; }
             float ck = 0;
             for (auto& k : clicks) {
                 if (!k.active || f < k.frame) continue;
@@ -353,8 +435,18 @@ public:
             }
             const float m = s * sv + pv * sv + ck;
             float L = bl * bv + m, R = br * bv + m;
-            if (L > 1.f) L = 1.f; else if (L < -1.f) L = -1.f;
-            if (R > 1.f) R = 1.f; else if (R < -1.f) R = -1.f;
+            // limitador suave: ataque instantáneo, relajación de 80 ms
+            {
+                const float pk = std::max(std::fabs(L), std::fabs(R));
+                const float gt = pk > LIM ? LIM / pk : 1.f;
+                if (gt < limG) limG = gt; else limG += (gt - limG) * kRel;
+                L *= limG; R *= limG;
+            }
+            if (rec) {
+                const int64_t rp = recPos.load(std::memory_order_relaxed);
+                if (rp < recLen) { recBuf[rp * 2] = L; recBuf[rp * 2 + 1] = R; recPos.store(rp + 1, std::memory_order_relaxed); }
+                else recState.store(2, std::memory_order_release);
+            }
             float* fr = o + (size_t)i * oc;
             if (oc == 1) fr[0] = 0.5f * (L + R);
             else { fr[0] = L; fr[1] = R; for (int c = 2; c < oc; c++) fr[c] = (c & 1) ? R : L; }  // salida 3-4 (auriculares) = master
@@ -417,10 +509,11 @@ JNIEXPORT void JNICALL JF(nOutInfo)(JNIEnv* env, jobject, jintArray arr) {
     env->SetIntArrayRegion(arr, 0, 4, v);
 }
 JNIEXPORT void JNICALL JF(nSetSample)(JNIEnv* env, jobject, jfloatArray arr) {
-    auto* b = new Buf(); b->channels = 1;
-    jsize n = env->GetArrayLength(arr); b->data.resize(n);
-    env->GetFloatArrayRegion(arr, 0, n, b->data.data());
-    E->swapBuf(E->sample, b);
+    auto* b = new Smp();
+    jsize n = env->GetArrayLength(arr); b->lv[0].resize(n);
+    env->GetFloatArrayRegion(arr, 0, n, b->lv[0].data());
+    for (int k = 1; k < LV; k++) lowpassZeroPhase(b->lv[0], b->lv[k], 0.45 * E->sr / double(1 << k), E->sr);
+    E->swapSmp(b);
 }
 JNIEXPORT void JNICALL JF(nSetBeat)(JNIEnv* env, jobject, jfloatArray arr) {
     auto* b = new Buf(); b->channels = 2;
@@ -429,6 +522,30 @@ JNIEXPORT void JNICALL JF(nSetBeat)(JNIEnv* env, jobject, jfloatArray arr) {
     E->swapBuf(E->beat, b);
 }
 JNIEXPORT void JNICALL JF(nSetTarget)(JNIEnv*, jobject, jdouble t, jdouble v) { E->setTarget(t, v); }
+JNIEXPORT void JNICALL JF(nSetTargetAt)(JNIEnv*, jobject, jdouble t, jdouble v, jlong tm) { E->setTarget(t, v, (int64_t)tm); }
+JNIEXPORT void JNICALL JF(nSetEnd)(JNIEnv*, jobject, jdouble e) { E->endSec.store(e); }
+JNIEXPORT jint JNICALL JF(nRecStart)(JNIEnv*, jobject, jdouble seconds) {
+    if (!E || E->recState.load() == 1) return 0;
+    E->recLen = (int64_t)(seconds * E->sr);
+    E->recBuf.assign((size_t)E->recLen * 2, 0.f);
+    E->recPos.store(0);
+    E->recState.store(1, std::memory_order_release);
+    return E->sr;
+}
+JNIEXPORT jfloat JNICALL JF(nRecProgress)(JNIEnv*, jobject) {
+    if (!E) return -1.f;
+    const int st = E->recState.load(std::memory_order_acquire);
+    if (st == 0) return -1.f;
+    if (st == 2) return 1.f;
+    return E->recLen > 0 ? std::min(0.999f, float(E->recPos.load()) / float(E->recLen)) : 0.f;
+}
+JNIEXPORT jint JNICALL JF(nRecFetch)(JNIEnv* env, jobject, jfloatArray out) {
+    if (!E || E->recState.load(std::memory_order_acquire) != 2) return 0;
+    const jsize n = std::min<jsize>(env->GetArrayLength(out), (jsize)E->recBuf.size());
+    env->SetFloatArrayRegion(out, 0, n, E->recBuf.data());
+    E->recState.store(0);
+    return n;
+}
 JNIEXPORT void JNICALL JF(nSetFader)(JNIEnv*, jobject, jfloat v) { E->uiFader.store(v); }
 JNIEXPORT void JNICALL JF(nSetSources)(JNIEnv*, jobject, jint disc, jint fader) { E->discSource.store(disc); E->faderSource.store(fader); }
 JNIEXPORT void JNICALL JF(nSetCue)(JNIEnv*, jobject, jdouble c) { E->cue.store(c); }

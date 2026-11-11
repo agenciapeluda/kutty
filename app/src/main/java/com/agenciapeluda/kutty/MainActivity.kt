@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         preferHighRefresh()
         CrashLog.install(this)
+        com.agenciapeluda.kutty.ui.Recorder.ctx = applicationContext
         Store.init(this)
         Inputs.preferredOutput(this).let { (id, ch) -> Engine.start(id, ch) }
         Engine.nSetVolumes(Store.set.beatVol, Store.set.scratchVol)

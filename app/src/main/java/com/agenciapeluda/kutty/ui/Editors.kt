@@ -62,32 +62,38 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** Pone en el motor el sonido y la pista elegidos. */
-fun applyAudio() {
+/** Pone en el motor el sonido elegido (cue y fin incluidos). */
+fun applySound() {
     val s = Store.curSound() ?: return
     Engine.nSetSample(s.data)
     Engine.nSetCue(s.cue)
-    Store.curBeat()?.let { Engine.nSetBeat(it.data) }
+    Engine.nSetEnd(s.end)
     Inputs.resetDisc()
 }
 
+/** Pone en el motor el sonido y la pista elegidos. */
+fun applyAudio() {
+    Store.curBeat()?.let { Engine.nSetBeat(it.data) }
+    applySound()
+}
+
 fun selectAudio(kind: String, key: String) {
-    if (kind == "sound") Store.set.sound = key
-    else {
-        Store.set.beat = key
-        val b = Store.beats[key]
-        if (b != null && !Session.running) Session.bpm = if (b.builtin) (Session.tech?.bpm ?: 85) else b.bpm.roundToInt()
+    if (kind == "sound") {
+        val same = Store.set.sound == key
+        Store.set.sound = key; Store.save()
+        if (!same) applySound()
+        return
     }
+    Store.set.beat = key
+    val b = Store.beats[key]
+    if (b != null && !Session.running) Session.bpm = if (b.builtin) (Session.tech?.bpm ?: 85) else b.bpm.roundToInt()
     Store.save(); applyAudio()
 }
 
-@Composable
-private fun DialogCard(onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().padding(16.dp), contentAlignment = Alignment.Center) {
-            Column(Modifier.widthIn(max = 720.dp).fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(C.panel).border(1.dp, C.border, RoundedCornerShape(18.dp)).verticalScroll(rememberScrollState()).padding(20.dp)) { content() }
-        }
-    }
+/** Suena el sonido de cue a fin. */
+fun previewSound(key: String) {
+    val s = Store.sounds[key] ?: return
+    Engine.nPreview(s.cue, max(0.05, s.end - s.cue))
 }
 
 @Composable
@@ -108,20 +114,20 @@ fun ChooserDialog(kind: String) {
             if (isS) Nav.soundEditor = key else Nav.trackEditor = key
         }
     }
-    DialogCard({ Nav.chooser = null }) {
-        Text(if (isS) "Sonido a scratchear" else "Pista", style = T.h1.copy(fontSize = 18.sp()))
+    Modal(if (isS) "Sonido a scratchear" else "Pista", { if (isS) Engine.nStopPreview(); Nav.chooser = null }) {
         Text(
             if (isS) "Subí una frase, una voz o un sample: la app arma la onda y pone el cue en el primer ataque. Lo podés mover."
             else "Subí un beat o un tema. Elegís si suena en loop (1 a 8 compases) o libre; la app detecta el BPM y el 1.",
             style = T.small, modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
         )
         val cur = if (isS) Store.set.sound else Store.set.beat
-        val items: List<Triple<String, String, String>> = if (isS) Store.sounds.values.sortedBy { !it.builtin }.map { Triple(it.key, it.name, "%.1f s · cue %.2f".format(it.duration, it.cue)) }
+        val items: List<Triple<String, String, String>> = if (isS) Store.sounds.values.sortedBy { !it.builtin }.map { Triple(it.key, it.name, "%.2f s · cue %.2f".format(it.end - it.cue, it.cue)) }
         else Store.beats.values.sortedBy { !it.builtin }.map { Triple(it.key, it.name, (if (it.loop) "loop ${it.bars}c" else "libre") + " · " + (Math.round(it.bpm * 10) / 10.0)) }
         items.forEach { (k, name, meta) ->
             val on = k == cur
             Row(Modifier.fillMaxWidth().padding(vertical = 3.dp).clip(R12).background(C.dark).border(1.dp, if (on) C.accent else C.divider, R12), verticalAlignment = Alignment.CenterVertically) {
-                Row(Modifier.weight(1f).clickable { selectAudio(kind, k); Nav.chooser = null }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                // sonido: tocar la fila lo elige y lo hace sonar, el modal queda abierto
+                Row(Modifier.weight(1f).clickable { selectAudio(kind, k); if (isS) previewSound(k) else Nav.chooser = null }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(14.dp).clip(CircleShape).background(if (on) C.accentText else C.tick))
                     Spacer(Modifier.width(10.dp))
                     Text(name, style = T.bodyB, maxLines = 1, modifier = Modifier.weight(1f))
@@ -135,26 +141,33 @@ fun ChooserDialog(kind: String) {
             }
         }
         Spacer(Modifier.height(12.dp))
-        Btn(if (busy) "Leyendo…" else if (isS) "Subir sonido" else "Subir pista", Modifier.fillMaxWidth(), enabled = !busy) { pick.launch("audio/*") }
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Btn(if (busy) "Leyendo…" else if (isS) "Subir sonido" else "Subir pista", Modifier.weight(1f), if (isS) "ghost" else "primary", enabled = !busy) { pick.launch("audio/*") }
+            if (isS) Btn("Listo", Modifier.weight(1f)) { Engine.nStopPreview(); Nav.chooser = null }
+        }
     }
 }
 
 private fun Int.sp() = androidx.compose.ui.unit.TextUnit(this.toFloat(), androidx.compose.ui.unit.TextUnitType.Sp)
 
-/** Onda con un arrastre que devuelve el segundo tocado. */
+const val DOWN = 0
+const val MOVE = 1
+const val UP = 2
+
+/** Onda con un arrastre que devuelve el segundo tocado y la fase (DOWN, MOVE, UP). */
 @Composable
-private fun WaveBox(pk: Peaks, s0: Double, s1: Double, height: Int, onSec: (Double, Boolean) -> Unit, over: androidx.compose.ui.graphics.drawscope.DrawScope.((Double) -> Float) -> Unit) {
+private fun WaveBox(pk: Peaks, s0: Double, s1: Double, height: Int, onSec: (Double, Int) -> Unit, over: androidx.compose.ui.graphics.drawscope.DrawScope.((Double) -> Float) -> Unit) {
     Canvas(Modifier.fillMaxWidth().height(height.dp).clip(R12).background(C.dark).border(1.dp, C.divider, R12).pointerInput(s0, s1) {
         awaitEachGesture {
             val d = awaitFirstDown()
-            onSec(s0 + d.position.x / size.width * (s1 - s0), false)
+            onSec(s0 + d.position.x / size.width * (s1 - s0), DOWN)
             while (true) {
                 val ev = awaitPointerEvent()
                 val ch = ev.changes.firstOrNull { it.id == d.id } ?: break
                 if (!ch.pressed) break
-                onSec(s0 + ch.position.x / size.width * (s1 - s0), false); ch.consume()
+                onSec(s0 + ch.position.x / size.width * (s1 - s0), MOVE); ch.consume()
             }
-            onSec(Double.NaN, true)
+            onSec(Double.NaN, UP)
         }
     }) {
         waveRange(pk, s0, s1, 0f, size.height)
@@ -166,31 +179,53 @@ private fun WaveBox(pk: Peaks, s0: Double, s1: Double, height: Int, onSec: (Doub
 fun SoundEditor(key: String) {
     val s = Store.sounds[key] ?: run { Nav.soundEditor = null; return }
     var cue by remember { mutableStateOf(s.cue) }
+    var end by remember { mutableStateOf(s.end) }
+    var active by remember { mutableStateOf("cue") }     // marcador que se mueve: cue | fin
     var zoomCenter by remember { mutableStateOf(s.cue) }
     val Z = 0.35
-    fun setCue(v: Double) { cue = v.coerceIn(0.0, max(0.0, s.duration - 0.05)); s.cue = cue; Engine.nSetCue(cue) }
-    fun done() { if (!s.builtin) Store.saveMeta(key) else s.cue = cue; Inputs.resetDisc(); Nav.soundEditor = null }
-    DialogCard(::done) {
-        Text(s.name, style = T.h1.copy(fontSize = 18.sp()))
-        Text("Tocá o arrastrá sobre la onda para poner el cue. Abajo, el zoom: la franja violeta es lo que suena con un cuarto de vuelta.", style = T.small, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
-        WaveBox(s.peaks, 0.0, s.duration, 84, { v, end -> if (end) zoomCenter = cue else { setCue(v); zoomCenter = cue } }) { X ->
-            drawRect(C.bg.copy(alpha = 0.55f), Offset.Zero, Size(X(cue), size.height))
-            marker(X(cue), C.cue)
-            drawRect(C.accentText, Offset(X(cue - Z), 0f), Size(X(cue + Z) - X(cue - Z), size.height), style = androidx.compose.ui.graphics.drawscope.Stroke(1f))
-        }
+    val isCur = Store.set.sound == key
+    fun setCue(v: Double) { cue = v.coerceIn(0.0, max(0.0, end - 0.05)); s.cue = cue; if (isCur) Engine.nSetCue(cue) }
+    fun setEnd(v: Double) { end = v.coerceIn(min(s.duration, cue + 0.05), s.duration); s.end = end; if (isCur) Engine.nSetEnd(end) }
+    fun setActive(v: Double) { if (active == "cue") setCue(v) else setEnd(v) }
+    fun focus() { zoomCenter = if (active == "cue") cue else end }
+    fun done() { Engine.nStopPreview(); s.cue = cue; s.end = end; if (!s.builtin) Store.saveMeta(key); if (isCur) applySound(); Nav.soundEditor = null }
+    fun androidx.compose.ui.graphics.drawscope.DrawScope.trim(X: (Double) -> Float) {
+        // lo de afuera apagado, la región resaltada
+        val xc = X(cue).coerceIn(0f, size.width); val xe = X(end).coerceIn(0f, size.width)
+        if (xc > 0f) drawRect(C.bg.copy(alpha = 0.62f), Offset.Zero, Size(xc, size.height))
+        if (xe < size.width) drawRect(C.bg.copy(alpha = 0.62f), Offset(xe, 0f), Size(size.width - xe, size.height))
+        if (xe > xc) drawRect(C.accent.copy(alpha = 0.10f), Offset(xc, 0f), Size(xe - xc, size.height))
+        marker(X(cue), C.cue)
+        marker(X(end), C.deck2)
+    }
+    Modal(s.name, ::done) {
+        Text("Tocá o arrastrá sobre la onda: se mueve el marcador más cercano. Ámbar es el cue (para atrás frena ahí), celeste es el fin (después, silencio).", style = T.small, modifier = Modifier.padding(bottom = 8.dp))
+        WaveBox(s.peaks, 0.0, s.duration, 84, { v, ph ->
+            when (ph) {
+                DOWN -> { active = if (kotlin.math.abs(v - cue) <= kotlin.math.abs(v - end)) "cue" else "fin"; setActive(v); focus() }
+                MOVE -> { setActive(v); focus() }
+                else -> focus()
+            }
+        }) { X -> trim(X) }
         Spacer(Modifier.height(10.dp))
-        WaveBox(s.peaks, zoomCenter - Z, zoomCenter + Z, 110, { v, end -> if (end) zoomCenter = cue else setCue(v) }) { X ->
-            drawRect(C.accent.copy(alpha = 0.14f), Offset(X(cue), 0f), Size(X(cue + UNIT) - X(cue), size.height))
-            marker(X(cue), C.cue)
+        WaveBox(s.peaks, zoomCenter - Z, zoomCenter + Z, 110, { v, ph -> if (ph == UP) focus() else setActive(v) }) { X ->
+            if (active == "cue") drawRect(C.accent.copy(alpha = 0.14f), Offset(X(cue), 0f), Size(X(min(end, cue + UNIT)) - X(cue), size.height))
+            trim(X)
+        }
+        Row(Modifier.fillMaxWidth().padding(top = 10.dp)) {
+            Seg(listOf("cue" to "Mover cue", "fin" to "Mover fin"), active) { active = it; focus() }
         }
         Row(Modifier.fillMaxWidth().padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("Cue: ${"%.3f".format(cue)} s", style = T.monoS, modifier = Modifier.weight(1f))
-            Btn("Auto", kind = "ghost", small = true) { setCue(AudioLib.autoCue(s.data, s.sr)); zoomCenter = cue }
-            Btn("Escuchar", kind = "ghost", small = true) { Engine.nPreview(cue, 0.8) }
+            Text("Cue ${"%.3f".format(cue)} · fin ${"%.3f".format(end)} · ${"%.2f".format(end - cue)} s", style = T.monoS, modifier = Modifier.weight(1f))
+            Btn("Auto", kind = "ghost", small = true) {
+                val c = AudioLib.autoCue(s.data, s.sr)
+                end = s.duration; setCue(c); setEnd(AudioLib.autoEnd(s.data, s.sr, cue)); focus()
+            }
+            Btn("Escuchar", kind = "ghost", small = true) { Engine.nPreview(cue, max(0.05, end - cue)) }
         }
         Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (!s.builtin) Btn("Borrar", Modifier.weight(1f), "danger") { Store.deleteAudio(key); applyAudio(); Nav.soundEditor = null }
+            if (!s.builtin) Btn("Borrar", Modifier.weight(1f), "danger") { Store.deleteAudio(key); applySound(); Nav.soundEditor = null }
             Btn("Listo", Modifier.weight(1f)) { done() }
         }
     }
@@ -220,10 +255,9 @@ fun TrackEditor(key: String) {
             k++
         }
     }
-    DialogCard(::done) {
-        Text(b.name, style = T.h1.copy(fontSize = 18.sp()))
-        Text("Tocá la onda para marcar el 1 (ámbar). Con Probar suena con un clic: tiene que caer con los golpes; si no, ajustá el BPM.", style = T.small, modifier = Modifier.padding(top = 4.dp, bottom = 8.dp))
-        WaveBox(b.peaks, 0.0, b.duration, 84, { v, end -> if (end) zoomCenter = start else { start = v.coerceIn(0.0, max(0.0, b.duration - 0.5)); zoomCenter = start; stopPlay() } }) { X ->
+    Modal(b.name, ::done) {
+        Text("Tocá la onda para marcar el 1 (ámbar). Con Probar suena con un clic: tiene que caer con los golpes; si no, ajustá el BPM.", style = T.small, modifier = Modifier.padding(bottom = 8.dp))
+        WaveBox(b.peaks, 0.0, b.duration, 84, { v, ph -> if (ph == UP) zoomCenter = start else { start = v.coerceIn(0.0, max(0.0, b.duration - 0.5)); zoomCenter = start; stopPlay() } }) { X ->
             if (loop) drawRect(C.accent.copy(alpha = 0.18f), Offset(X(start), 0f), Size(X(loopEnd) - X(start), size.height))
             grid(X, 0.0, b.duration, false)
             drawRect(C.bg.copy(alpha = 0.55f), Offset.Zero, Size(X(start), size.height))
@@ -231,7 +265,7 @@ fun TrackEditor(key: String) {
             if (loop) marker(X(loopEnd), C.accentText)
         }
         Spacer(Modifier.height(10.dp))
-        WaveBox(b.peaks, zoomCenter - Z, zoomCenter + Z, 110, { v, end -> if (end) zoomCenter = start else { start = v.coerceIn(0.0, max(0.0, b.duration - 0.5)); stopPlay() } }) { X ->
+        WaveBox(b.peaks, zoomCenter - Z, zoomCenter + Z, 110, { v, ph -> if (ph == UP) zoomCenter = start else { start = v.coerceIn(0.0, max(0.0, b.duration - 0.5)); stopPlay() } }) { X ->
             grid(X, zoomCenter - Z, zoomCenter + Z, true)
             marker(X(start), C.cue)
         }

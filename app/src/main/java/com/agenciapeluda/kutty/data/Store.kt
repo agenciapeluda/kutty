@@ -54,6 +54,7 @@ class Settings {
     var xfaderSide by mutableStateOf("right")   // qué lado del crossfader abre el sonido
     var learnJog by mutableStateOf("")          // "status:data1" aprendido
     var learnFader by mutableStateOf("")
+    var holdCuts by mutableStateOf(false)       // botón de corte del modo teléfono: mantener = corta
 
     fun toJson() = JSONObject().apply {
         put("beat", beat); put("sound", sound); put("beatVol", beatVol.toDouble()); put("scratchVol", scratchVol.toDouble())
@@ -61,7 +62,7 @@ class Settings {
         put("cutIn", cutIn.toDouble()); put("hamster", hamster); put("diff", diff); put("bars", bars); put("waves", waves); put("calib", calib)
         put("discSrc", discSrc); put("faderSrc", faderSrc); put("dvsDevice", dvsDevice); put("outDevice", outDevice); put("keylock", keylock); put("progressive", progressive); put("progMax", progMax); put("progStep", progStep); put("dvsThreshold", dvsThreshold.toDouble())
         put("dvsInvert", dvsInvert); put("jogSteps", jogSteps); put("xfaderCutLag", xfaderCutLag.toDouble()); put("xfaderSide", xfaderSide)
-        put("learnJog", learnJog); put("learnFader", learnFader)
+        put("learnJog", learnJog); put("learnFader", learnFader); put("holdCuts", holdCuts)
     }
     fun fromJson(o: JSONObject) {
         beat = o.optString("beat", beat); sound = o.optString("sound", sound)
@@ -73,7 +74,7 @@ class Settings {
         discSrc = o.optString("discSrc", discSrc); faderSrc = o.optString("faderSrc", faderSrc); dvsDevice = o.optInt("dvsDevice", dvsDevice); outDevice = o.optInt("outDevice", outDevice); keylock = o.optBoolean("keylock", keylock); progressive = o.optBoolean("progressive", progressive); progMax = o.optInt("progMax", progMax); progStep = o.optInt("progStep", progStep)
         dvsThreshold = o.optDouble("dvsThreshold", dvsThreshold.toDouble()).toFloat(); dvsInvert = o.optBoolean("dvsInvert", dvsInvert)
         jogSteps = o.optInt("jogSteps", jogSteps); xfaderCutLag = o.optDouble("xfaderCutLag", xfaderCutLag.toDouble()).toFloat()
-        xfaderSide = o.optString("xfaderSide", xfaderSide); learnJog = o.optString("learnJog", learnJog); learnFader = o.optString("learnFader", learnFader)
+        xfaderSide = o.optString("xfaderSide", xfaderSide); learnJog = o.optString("learnJog", learnJog); learnFader = o.optString("learnFader", learnFader); holdCuts = o.optBoolean("holdCuts", holdCuts)
     }
 }
 
@@ -147,7 +148,7 @@ object Store {
             val key = m.getString("key"); val name = m.getString("name")
             if (m.getString("kind") == "sound") {
                 val d = AudioLib.normalize(AudioLib.convert(AudioLib.decode(file.path, 30.0), 1, sr, 30.0))
-                s[key] = SoundItem(key, name, d, sr, m.optDouble("cue", AudioLib.autoCue(d, sr)), AudioLib.peaks(d, 1, sr), false)
+                s[key] = SoundItem(key, name, d, sr, m.optDouble("cue", AudioLib.autoCue(d, sr)), AudioLib.peaks(d, 1, sr), false, m.optDouble("end", -1.0))
             } else {
                 val d = AudioLib.convert(AudioLib.decode(file.path, 600.0), 2, sr, 600.0)
                 b[key] = BeatItem(key, name, d, sr, m.getDouble("bpm"), m.getDouble("start"), m.getBoolean("loop"), m.getInt("bars"), AudioLib.peaks(d, 2, sr), false)
@@ -169,8 +170,9 @@ object Store {
         val meta = JSONObject().put("key", key).put("name", name).put("kind", kind).put("file", key)
         if (kind == "sound") {
             val d = AudioLib.normalize(AudioLib.convert(AudioLib.decode(file.path, 30.0), 1, sr, 30.0))
-            val it = SoundItem(key, name, d, sr, AudioLib.autoCue(d, sr), AudioLib.peaks(d, 1, sr), false)
-            sounds[key] = it; meta.put("cue", it.cue)
+            val cue = AudioLib.autoCue(d, sr)
+            val it = SoundItem(key, name, d, sr, cue, AudioLib.peaks(d, 1, sr), false, AudioLib.autoEnd(d, sr, cue))
+            sounds[key] = it; meta.put("cue", it.cue).put("end", it.end)
         } else {
             val d = AudioLib.convert(AudioLib.decode(file.path, 600.0), 2, sr, 600.0)
             val pk = AudioLib.peaks(d, 2, sr)
@@ -187,7 +189,7 @@ object Store {
         for (i in 0 until idx.length()) {
             val m = idx.getJSONObject(i)
             if (m.getString("key") != key) continue
-            sounds[key]?.let { m.put("cue", it.cue) }
+            sounds[key]?.let { m.put("cue", it.cue).put("end", it.end) }
             beats[key]?.let { m.put("bpm", it.bpm).put("start", it.start).put("loop", it.loop).put("bars", it.bars) }
         }
         writeIndex(idx)
