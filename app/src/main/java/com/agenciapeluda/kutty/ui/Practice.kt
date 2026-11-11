@@ -84,6 +84,13 @@ fun PracticeScreen() {
     LaunchedEffect(Unit) { while (true) withFrameNanos { Session.tick(); Recorder.poll(); frame = it } }
     val view = LocalView.current
     DisposableEffect(Unit) { view.keepScreenOn = true; onDispose { view.keepScreenOn = false; Inputs.phoneMode = false } }
+    // «Siempre modo teléfono»: la práctica se pone en horizontal aunque la rotación esté bloqueada
+    val act = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
+    val forceLand = Store.set.phoneLayout == "siempre"
+    DisposableEffect(forceLand) {
+        if (forceLand) act?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        onDispose { act?.requestedOrientation = android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED }
+    }
     if (Session.tech == null) return
     Box(Modifier.fillMaxSize().background(C.bg).clickable(enabled = false) {}) {
         BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
@@ -91,8 +98,9 @@ fun PracticeScreen() {
             val mh = maxHeight
             val land = mw > mh
             // modo teléfono: horizontal y sin ningún dispositivo conectado
-            val noDevices = Inputs.midiDevices.isEmpty() && Inputs.audioInputs.isEmpty() && Inputs.audioOutputs.isEmpty()
-            val phone = land && noDevices
+            // sin controladora = disco y fader salen de la pantalla
+            val noController = Inputs.discActive == "touch" && Inputs.faderActive == "touch"
+            val phone = land && when (Store.set.phoneLayout) { "siempre" -> true; "nunca" -> false; else -> noController }
             SideEffect { Inputs.phoneMode = phone }
             val ham = Store.set.hamster
             if (phone) PhoneLayout(frame)

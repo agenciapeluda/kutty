@@ -54,7 +54,8 @@ class Settings {
     var xfaderSide by mutableStateOf("right")   // qué lado del crossfader abre el sonido
     var learnJog by mutableStateOf("")          // "status:data1" aprendido
     var learnFader by mutableStateOf("")
-    var holdCuts by mutableStateOf(false)       // botón de corte del modo teléfono: mantener = corta
+    var holdCuts by mutableStateOf(false)
+    var phoneLayout by mutableStateOf("auto")   // pantalla de práctica: auto | siempre | nunca       // botón de corte del modo teléfono: mantener = corta
 
     fun toJson() = JSONObject().apply {
         put("beat", beat); put("sound", sound); put("beatVol", beatVol.toDouble()); put("scratchVol", scratchVol.toDouble())
@@ -62,7 +63,7 @@ class Settings {
         put("cutIn", cutIn.toDouble()); put("hamster", hamster); put("diff", diff); put("bars", bars); put("waves", waves); put("calib", calib)
         put("discSrc", discSrc); put("faderSrc", faderSrc); put("dvsDevice", dvsDevice); put("outDevice", outDevice); put("keylock", keylock); put("progressive", progressive); put("progMax", progMax); put("progStep", progStep); put("dvsThreshold", dvsThreshold.toDouble())
         put("dvsInvert", dvsInvert); put("jogSteps", jogSteps); put("xfaderCutLag", xfaderCutLag.toDouble()); put("xfaderSide", xfaderSide)
-        put("learnJog", learnJog); put("learnFader", learnFader); put("holdCuts", holdCuts)
+        put("learnJog", learnJog); put("learnFader", learnFader); put("holdCuts", holdCuts); put("phoneLayout", phoneLayout)
     }
     fun fromJson(o: JSONObject) {
         beat = o.optString("beat", beat); sound = o.optString("sound", sound)
@@ -74,7 +75,7 @@ class Settings {
         discSrc = o.optString("discSrc", discSrc); faderSrc = o.optString("faderSrc", faderSrc); dvsDevice = o.optInt("dvsDevice", dvsDevice); outDevice = o.optInt("outDevice", outDevice); keylock = o.optBoolean("keylock", keylock); progressive = o.optBoolean("progressive", progressive); progMax = o.optInt("progMax", progMax); progStep = o.optInt("progStep", progStep)
         dvsThreshold = o.optDouble("dvsThreshold", dvsThreshold.toDouble()).toFloat(); dvsInvert = o.optBoolean("dvsInvert", dvsInvert)
         jogSteps = o.optInt("jogSteps", jogSteps); xfaderCutLag = o.optDouble("xfaderCutLag", xfaderCutLag.toDouble()).toFloat()
-        xfaderSide = o.optString("xfaderSide", xfaderSide); learnJog = o.optString("learnJog", learnJog); learnFader = o.optString("learnFader", learnFader); holdCuts = o.optBoolean("holdCuts", holdCuts)
+        xfaderSide = o.optString("xfaderSide", xfaderSide); learnJog = o.optString("learnJog", learnJog); learnFader = o.optString("learnFader", learnFader); holdCuts = o.optBoolean("holdCuts", holdCuts); phoneLayout = o.optString("phoneLayout", phoneLayout)
     }
 }
 

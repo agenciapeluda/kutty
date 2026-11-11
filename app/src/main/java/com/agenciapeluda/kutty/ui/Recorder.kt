@@ -50,7 +50,22 @@ object Recorder {
         thread(name = "kutty-wav") {
             val name = "kutty-" + SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date()) + ".wav"
             val msg = runCatching { save(name, data, n, rate) }.getOrElse { "No pude guardar la grabación" }
-            android.os.Handler(android.os.Looper.getMainLooper()).post { Nav.toast = msg }
+            android.os.Handler(android.os.Looper.getMainLooper()).post { Nav.toast = msg; share() }
+        }
+    }
+
+    private var lastUri: android.net.Uri? = null
+
+    /** Abre el menú de compartir con la última grabación (WhatsApp, Drive, mail, el chat…). */
+    fun share() {
+        val uri = lastUri ?: return
+        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+            type = "audio/wav"
+            putExtra(android.content.Intent.EXTRA_STREAM, uri)
+            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching {
+            ctx.startActivity(android.content.Intent.createChooser(send, "Mandar la grabación").addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION))
         }
     }
 
@@ -63,6 +78,7 @@ object Recorder {
             }
             val uri = ctx.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, v) ?: error("sin destino")
             ctx.contentResolver.openOutputStream(uri)!!.use { writeWav(it, data, n, rate) }
+            lastUri = uri
             return "Grabación guardada en Descargas/Kutty/$name"
         }
         val dir = ctx.getExternalFilesDir(Environment.DIRECTORY_MUSIC) ?: ctx.filesDir

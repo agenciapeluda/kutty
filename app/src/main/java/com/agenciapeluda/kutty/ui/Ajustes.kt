@@ -184,6 +184,9 @@ fun AjustesScreen() {
         SRow("Tono del beat al cambiar el BPM") { Seg(listOf(false to "Como un plato", true to "Keylock"), s.keylock) { s.keylock = it; Store.save(); Engine.nSetKeylock(it) } }
         SRow("Cut-in", "Cuánto hay que mover el fader para que suene") { KSlider(s.cutIn, 0.02f..0.4f, "${(s.cutIn * 100).roundToInt()}%") { s.cutIn = it } }
         SRow("Hamster", "Invierte el fader y cambia de lado el plato y el botón de corte") { Seg(listOf(false to "Normal", true to "Invertido"), s.hamster) { s.hamster = it; Store.save() } }
+        SRow("Pantalla de práctica", "Modo teléfono: medio vinilo y botón de corte grande. En Auto aparece al poner el teléfono en horizontal sin controladora; en Siempre la práctica se gira sola") {
+            Seg(listOf("auto" to "Auto", "siempre" to "Siempre teléfono", "nunca" to "Nunca"), s.phoneLayout) { s.phoneLayout = it; Store.save() }
+        }
         SRow("Botón de corte", "Teléfono en horizontal sin controladora: medio vinilo y un botón grande para el pulgar") {
             Seg(listOf(false to "Mantener = abre", true to "Mantener = corta"), s.holdCuts) { s.holdCuts = it; Store.save() }
         }
