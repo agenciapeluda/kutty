@@ -264,11 +264,13 @@ object AudioLib {
                 }
             }
             else -> {
-                val lp = Biquad("lp", 3200.0, 0.707, sr); var ph = 0.0
+                // tono de scratch: senoidal con un poco de armónicos (sin escalones como el diente de sierra)
+                var ph = 0.0
                 for (i in 0 until n) {
                     val t = i.toDouble() / sr
                     ph = (ph + 330.0 / sr) % 1.0
-                    o[i] = (lp.p(2 * ph - 1) * env(t, listOf(0.006 to 0.8, 1.4 to 0.7, 1.6 to 0.0))).toFloat()
+                    val v = sin(2 * PI * ph) + 0.22 * sin(4 * PI * ph) + 0.08 * sin(6 * PI * ph)
+                    o[i] = (v * env(t, listOf(0.006 to 0.8, 1.4 to 0.7, 1.6 to 0.0))).toFloat()
                 }
             }
         }

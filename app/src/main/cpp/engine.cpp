@@ -135,6 +135,8 @@ public:
     double dv = 0;        // velocidad del disco (segundos de sonido por segundo)
     double spSm = 0;      // |velocidad| suavizada, para el antialias
     float limG = 1.f;     // ganancia del limitador
+    // filtro de continua (como un pre de phono): con el disco quieto no sale nada
+    double dcX = 0, dcY = 0, pvX = 0, pvY = 0;
 
     // diagnóstico: 10 s de la salida
     std::atomic<int> recState{0};      // 0 nada, 1 grabando, 2 listo
@@ -372,6 +374,7 @@ public:
         // extrapolación: 15 ms con la velocidad del evento y después se apaga en 20 ms
         constexpr double H1 = 0.015, HL = 0.020;
         constexpr float LIM = 0.89f;  // -1 dBFS
+        const double dcR = std::exp(-2.0 * M_PI * 20.0 / sr);   // pasaaltos de 20 Hz
         const bool rec = recState.load(std::memory_order_acquire) == 1;
         for (int i = 0; i < n; i++) {
             const int64_t f = f0 + i;
@@ -422,10 +425,13 @@ public:
             if (smp) {
                 // pasado el fin, silencio (con 3 ms de rampa para que no haga click)
                 double eg = (endS - pos) / 0.003; if (eg > 1) eg = 1; else if (eg < 0) eg = 0;
-                if (eg > 0) s = readSmp(smp, pos, sr, spSm) * float(gain * eg);
+                const double raw = eg > 0 ? readSmp(smp, pos, sr, spSm) * eg : 0.0;
+                dcY = raw - dcX + dcR * dcY; dcX = raw;
+                s = float(dcY * gain);
             }
             float pv = 0;
             if (pvOn && smp) { pv = hermite(smp->lv[0].data(), smp->frames(), pvPos * sr); pvPos += 1.0 / sr; if (pvPos >= pvEnd) pvOn = false; }
+            pvY = pv - pvX + dcR * pvY; pvX = pv; pv = float(pvY);
             float ck = 0;
             for (auto& k : clicks) {
                 if (!k.active || f < k.frame) continue;
