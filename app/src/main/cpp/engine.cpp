@@ -195,7 +195,7 @@ public:
         int64_t newest = h ? pts[(h - 1) % PTN].t : 0;
         if (newest > 0) {
             const double gap = (now - newest) / 1e9;   // edad del último dato cuando llega el siguiente
-            if (gap > 0 && gap < 0.06) gapEnv = std::max(gap, gapEnv * 0.99);
+            if (gap > 0 && gap < 0.06) gapEnv = std::max(gap, gapEnv * 0.998);
             double d = gapEnv + 0.002; if (d < 0.003) d = 0.003; if (d > 0.05) d = 0.05;
             needD.store(d, std::memory_order_relaxed);
         }
@@ -388,7 +388,7 @@ public:
             for (uint32_t j = 0; j < m; j++) { const Pt& q = pts[(h - m + j) % PTN]; if (q.t >= floorT) sp[sn++] = q; }
             // el retardo se mueve despacio (si no, cambiaría la afinación)
             const double want = needD.load(std::memory_order_relaxed);
-            const double maxStep = 0.05 * n / sr;
+            const double maxStep = 0.005 * n / sr;   // como mucho 0,5 % de cambio de velocidad
             Dsm += std::max(-maxStep, std::min(maxStep, want - Dsm));
         }
         const int64_t Dns = (int64_t)(Dsm * 1e9);
@@ -401,8 +401,10 @@ public:
         const double kSp = 1.0 - std::exp(-1.0 / (0.003 * sr));
         const float kRel = 1.f - std::exp(-1.f / (0.08f * sr));
         const double dts = 1.0 / sr;
-        // seguidor críticamente amortiguado: ω = 150 rad/s
-        constexpr double W = 150.0, W2 = W * W;
+        // el disco: pasabajos de 2º orden críticamente amortiguado (ω = 180 rad/s, ~11 ms)
+        // sobre la trayectoria. Sin velocidad directa: así sí se comen los escalones
+        // de cada punto táctil (antes pasaban y sonaba a chapa).
+        constexpr double W = 180.0, W2 = W * W;
         constexpr float LIM = 0.89f;  // -1 dBFS
         const double dcR = std::exp(-2.0 * M_PI * 20.0 / sr);   // pasaaltos de 20 Hz
         const bool rec = recState.load(std::memory_order_acquire) == 1;
@@ -454,21 +456,11 @@ public:
                     while (cur + 2 < sn && sp[cur + 1].t <= qt) cur++;
                     while (cur > 0 && sp[cur].t > qt) cur--;
                     const Pt& a = sp[cur]; const Pt& b = sp[cur + 1];
-                    const double hh = (b.t - a.t) / 1e9;
-                    const double lin = (b.p - a.p) / hh;
-                    auto tan = [&](int k) {
-                        if (k <= 0 || k >= sn - 1) return lin;
-                        double m = (sp[k + 1].p - sp[k - 1].p) / ((sp[k + 1].t - sp[k - 1].t) / 1e9);
-                        if (m > 40) m = 40; else if (m < -40) m = -40;
-                        return m;
-                    };
-                    const double m0 = tan(cur), m1 = tan(cur + 1);
-                    const double u = (qt - a.t) / 1e9 / hh, u2 = u * u, u3 = u2 * u;
-                    xt = (2 * u3 - 3 * u2 + 1) * a.p + (u3 - 2 * u2 + u) * hh * m0 + (-2 * u3 + 3 * u2) * b.p + (u3 - u2) * hh * m1;
-                    vt = ((6 * u2 - 6 * u) * a.p + (3 * u2 - 4 * u + 1) * hh * m0 + (-6 * u2 + 6 * u) * b.p + (3 * u2 - 2 * u) * hh * m1) / hh;
-                    if (vt > 40) vt = 40; else if (vt < -40) vt = -40;
+                    const double u = double(qt - a.t) / double(b.t - a.t);
+                    xt = a.p + (b.p - a.p) * u; vt = 0;
                 }
             }
+            if (!dvs) vt = 0;   // táctil/jog: filtrado puro; DVS ya viene suave y conserva su velocidad
             dv += (W2 * (xt - pos) + 2 * W * (vt - dv)) * dts;
             if (dv > 16) dv = 16; else if (dv < -16) dv = -16;
             pos += dv * dts;
