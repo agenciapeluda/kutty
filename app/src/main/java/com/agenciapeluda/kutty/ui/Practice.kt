@@ -104,17 +104,34 @@ fun PracticeScreen() {
             SideEffect { Inputs.phoneMode = phone }
             val ham = Store.set.hamster
             if (phone) PhoneLayout(frame)
-            else Column(Modifier.fillMaxSize()) {
-                TopBar(land)
-                Hud(land)
+            else if (land) Column(Modifier.fillMaxSize()) {
+                // horizontal: el gráfico usa todo el alto; plato y fader en una columna al costado
+                // (con controladora son solo espejo, así que van más chicos)
+                TopBar(true)
+                Hud(true)
+                val sideW = if (noController) minOf(mw * 0.34f, mh * 0.62f) else minOf(mw * 0.2f, 190.dp)
+                val side: @Composable RowScope.() -> Unit = {
+                    BoxWithConstraints(Modifier.width(sideW).fillMaxHeight()) {
+                        val d = minOf(maxWidth, maxHeight - 112.dp).coerceAtLeast(60.dp)
+                        Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)) {
+                            Disc(Modifier.size(d), frame)
+                            Fader(Modifier.fillMaxWidth(), frame)
+                        }
+                    }
+                }
+                Row(Modifier.weight(1f).fillMaxWidth().padding(start = 12.dp, end = 12.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    // hamster: el plato y el fader cambian de lado
+                    if (ham) side()
+                    Stage(Modifier.weight(1f).fillMaxHeight(), frame)
+                    if (!ham) side()
+                }
+            } else Column(Modifier.fillMaxSize()) {
+                TopBar(false)
+                Hud(false)
                 Stage(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 12.dp), frame)
-                if (land) Row(Modifier.fillMaxWidth().height(mh * 0.4f).padding(12.dp), horizontalArrangement = Arrangement.spacedBy(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    // hamster: el plato en pantalla y el fader cambian de lado
-                    if (ham) { Fader(Modifier.weight(1f)); Disc(Modifier.fillMaxHeight().aspectRatio(1f), frame) }
-                    else { Disc(Modifier.fillMaxHeight().aspectRatio(1f), frame); Fader(Modifier.weight(1f)) }
-                } else Column(Modifier.fillMaxWidth().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Column(Modifier.fillMaxWidth().padding(12.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Disc(Modifier.width(min(mw.value * 0.66f, mh.value * 0.36f).dp).aspectRatio(1f), frame)
-                    Fader(Modifier.fillMaxWidth())
+                    Fader(Modifier.fillMaxWidth(), frame)
                 }
             }
         }
@@ -150,12 +167,13 @@ private fun PhoneLayout(frame: Long) {
 private fun TopBar(land: Boolean) {
     val t = Session.tech!!
     val run = Session.running
+    val libre = Session.mode == "libre"
     @Composable fun Title(mod: Modifier) = Column(mod) {
-        Text(t.name, style = T.bodyB.copy(fontSize = 15.5.sp), maxLines = 1)
-        Text("${t.family} · Nivel ${t.level}", style = T.small.copy(fontSize = 12.sp), maxLines = 1)
+        Text(if (libre) "Scratch libre" else t.name, style = T.bodyB.copy(fontSize = 15.5.sp), maxLines = 1)
+        Text(if (libre) "Tu pista y tu sonido, sin ejercicio" else "${t.family} · Nivel ${t.level}", style = T.small.copy(fontSize = 12.sp), maxLines = 1)
     }
     @Composable fun Controls(mod: Modifier) = Row(mod, horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Seg(listOf("aprender" to "Aprender", "practicar" to "Practicar", "desafio" to "Desafío"), Session.mode, Modifier.weight(1f, fill = !land), enabled = !run) { Session.mode = it }
+        Seg(listOf("aprender" to "Aprender", "practicar" to "Practicar", "desafio" to "Desafío", "libre" to "Libre"), Session.mode, Modifier.weight(1f, fill = !land), enabled = !run) { Session.mode = it }
         Row(Modifier.clip(R12).background(C.dark).border(1.dp, C.divider, R12).padding(3.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(32.dp).clip(RoundedCornerShape(8.dp)).clickable(enabled = !run) { Session.bpm = (Session.bpm - 2).coerceAtLeast(50) }, contentAlignment = Alignment.Center) { Text("−", style = T.body.copy(color = C.text2, fontSize = 18.sp)) }
             Text("${if (run && Session.mode == "desafio" && !Session.demoOnly) Session.challengeBpm else Session.bpm}", style = T.num.copy(fontSize = 16.sp), modifier = Modifier.widthIn(min = 40.dp).clickable(enabled = !run) { Nav.bpmSheet = true })
@@ -169,7 +187,7 @@ private fun TopBar(land: Boolean) {
     // Escuchar (secundario): demo de dos compases con plato y fader automáticos
     val go = @Composable {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (!run) Btn("Escuchar", kind = "ghost", enabled = Store.audioReady) { Session.start(true) }
+            if (!run && !libre) Btn("Escuchar", kind = "ghost", enabled = Store.audioReady) { Session.start(true) }
             Btn(if (run) "Parar" else "Empezar", kind = if (run) "stop" else "primary", enabled = Store.audioReady) { if (run) Session.stop(false) else Session.start(false) }
         }
     }
@@ -186,7 +204,7 @@ private fun TopBar(land: Boolean) {
 @Composable
 private fun Chips() {
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        Seg(listOf("completo" to "Completo", "plato" to "Solo plato", "fader" to "Solo fader"), Session.part, enabled = !Session.running) { Session.part = it }
+        if (Session.mode != "libre") Seg(listOf("completo" to "Completo", "plato" to "Solo plato", "fader" to "Solo fader"), Session.part, enabled = !Session.running) { Session.part = it }
         AChip(beatLabel(), C.accentText, !Session.running) { Nav.chooser = "beat" }
         AChip(Store.curSound()?.name ?: "Sonido", C.cue, !Session.running) { Nav.chooser = "sound" }
         // diagnóstico: graba 10 s de la salida en WAV
@@ -370,7 +388,7 @@ private fun CutButton(frame: Long) {
 }
 
 @Composable
-private fun Fader(mod: Modifier) {
+private fun Fader(mod: Modifier, frame: Long) {
     val mode = Store.set.faderMode
     val btn = mode != "slide"
     val auto = Inputs.autoFader
@@ -406,7 +424,7 @@ private fun Fader(mod: Modifier) {
         } else {
             Canvas(Modifier.fillMaxWidth().height(80.dp).clip(R14).background(C.panel).border(1.dp, C.border, R14).then(gestures)) {
                 @Suppress("UNUSED_VARIABLE") val tk = tick
-                @Suppress("UNUSED_VARIABLE") val fr = Session.heardBeat   // redibuja con cada cuadro (MIDI y automático)
+                @Suppress("UNUSED_VARIABLE") val fr = frame   // redibuja con cada cuadro (controladora y automático)
                 val open = Inputs.faderOpen()
                 val y = size.height / 2
                 drawRoundRect(C.divider, Offset(14 * density, y - 2 * density), Size(size.width - 28 * density, 4 * density))

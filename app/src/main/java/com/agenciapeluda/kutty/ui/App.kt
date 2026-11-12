@@ -86,7 +86,7 @@ fun mastered() = Techniques.all.count { (Store.best[it.id] ?: 0) >= 85 }
 fun totalPts() = Store.sessions.sumOf { it.pts }
 fun levelOf(pts: Int): Triple<Int, Int, Int> { var l = 1; var need = 1500; var acc = 0; while (pts >= acc + need) { acc += need; l++; need = (need * 1.35).toInt() }; return Triple(l, pts - acc, need) }
 fun nextTech() = Techniques.all.sortedBy { it.level }.firstOrNull { (Store.best[it.id] ?: 0) < 85 } ?: Techniques.all[0]
-fun modeName(m: String) = when (m) { "aprender" -> "Aprender"; "desafio" -> "Desafío"; else -> "Practicar" }
+fun modeName(m: String) = when (m) { "aprender" -> "Aprender"; "desafio" -> "Desafío"; "libre" -> "Libre"; else -> "Practicar" }
 
 @Composable
 fun App() {
@@ -153,6 +153,16 @@ private fun HoyScreen() {
         }
         H2("Seguí con")
         TechCard(nt, big = true)
+        Spacer(Modifier.height(8.dp))
+        Card(Modifier.fillMaxWidth(), onClick = { openPractice(nt, "libre") }) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Scratch libre", style = T.bodyB)
+                    Text("Poné tu pista y scratcheá sin ejercicio: el gráfico muestra tu trazo", style = T.small.copy(color = C.text2))
+                }
+                Text("›", style = T.h1.copy(fontSize = 22.sp, color = C.accentText))
+            }
+        }
         H2("Últimas sesiones")
         if (Store.sessions.isEmpty()) Card(Modifier.fillMaxWidth()) {
             Text("Todavía no practicaste. Elegí una técnica y arrancá: el gráfico te muestra lo que hacés en vivo.", style = T.body.copy(color = C.text2), modifier = Modifier.padding(16.dp))

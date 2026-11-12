@@ -100,6 +100,10 @@ object Session {
         val list = ArrayList<Timed>()
         val beats: Double
         when {
+            mode == "libre" && !demoOnly -> {
+                // libre: la pista sigue hasta que pares, sin ejercicio ni puntaje
+                beats = 1e9
+            }
             demoOnly -> {
                 // Escuchar: dos compases al BPM elegido, plato y fader automáticos
                 beats = 8.0
@@ -138,8 +142,8 @@ object Session {
         nextGrade = 0; combo = 0; maxCombo = 0; pts = 0; ended = false; blocks = 0; result = null
         challengeBpm = bpm
         Inputs.resetDisc()
-        Inputs.autoFader = part == "plato" && !demo
-        Inputs.autoDisc = part == "fader" && !demo
+        Inputs.autoFader = part == "plato" && !demo && mode != "libre"
+        Inputs.autoDisc = part == "fader" && !demo && mode != "libre"
         Inputs.autoFaderOpen = false
         Inputs.resolve()
         Engine.nSetKeylock(Store.set.keylock)
@@ -324,6 +328,7 @@ object Session {
             else if (!hudState.startsWith("Bloque") || (now % blockBeats) > 3) {
                 val cur = timed.firstOrNull { now >= it.b0 && now < it.b1 }
                 hudState = when {
+                    mode == "libre" && !demoOnly -> "Libre · compás ${floor(now / 4).toInt() + 1}"
                     demoOnly || cur?.demo == true -> "Escuchá"
                     mode == "aprender" -> "Tu turno"
                     else -> "Compás ${floor(now / 4).toInt() + 1} / ${ceil(total / 4).toInt()}"
