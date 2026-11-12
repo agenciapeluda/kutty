@@ -192,6 +192,11 @@ fun AjustesScreen() {
             Seg(listOf(false to "Mantener = abre", true to "Mantener = corta"), s.holdCuts) { s.holdCuts = it; Store.save() }
         }
 
+        H2("Animaciones")
+        SRow("Trucos en Libre", "Ninja: un tajo marca cada truco, cada corte limpio tira una estrella y los combos pegan fuerte. Sobrio: solo el nombre del truco") {
+            Seg(listOf("ninja" to "Ninja", "sobrio" to "Sobrio"), s.anim) { s.anim = it; Store.save() }
+        }
+
         H2("Precisión")
         val tolMs = Tol.TABLE[s.diff]?.first ?: intArrayOf(45, 30, 60)
         SRow("Exigencia", "Cambio de dirección ±${tolMs[0]} ms · corte ±${tolMs[1]} ms · desfase parejo libre hasta ${tolMs[2]} ms") {

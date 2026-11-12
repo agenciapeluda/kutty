@@ -83,7 +83,14 @@ fun PracticeScreen() {
     var frame by remember { mutableLongStateOf(0L) }
     LaunchedEffect(Unit) { while (true) withFrameNanos { Session.tick(); Recorder.poll(); frame = it } }
     val view = LocalView.current
-    DisposableEffect(Unit) { view.keepScreenOn = true; onDispose { view.keepScreenOn = false; Inputs.phoneMode = false } }
+    DisposableEffect(Unit) {
+        view.keepScreenOn = true
+        // REV1 en Libre: PLAY/PAUSE = Start/Stop del plato, SHIFT + PLAY = beat, pads 1-4 = cues (SHIFT + pad guarda)
+        Inputs.onPlay = { if (Session.mode == "libre") Inputs.toggleMotor() }
+        Inputs.onShiftPlay = { if (Session.mode == "libre") Session.toggleBeat() }
+        Inputs.onPad = { i, sh -> if (Session.mode == "libre") Inputs.hotCue(i, sh) }
+        onDispose { view.keepScreenOn = false; Inputs.phoneMode = false; Inputs.onPlay = null; Inputs.onShiftPlay = null; Inputs.onPad = null }
+    }
     // «Siempre modo teléfono»: la práctica se pone en horizontal aunque la rotación esté bloqueada
     val act = androidx.compose.ui.platform.LocalContext.current as? android.app.Activity
     val forceLand = Store.set.phoneLayout == "siempre"
@@ -137,6 +144,8 @@ fun PracticeScreen() {
         }
         if (!Store.audioReady) Box(Modifier.fillMaxSize().background(C.bg.copy(alpha = 0.8f)), contentAlignment = Alignment.Center) { Text("Preparando el audio…", style = T.bodyB) }
         Session.result?.let { Results(it) }
+        if (Nav.libreEdit && Session.mode == "libre") Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.BottomCenter) { LibreEditPanel(frame) }
+        Session.libreRead?.let { LibreReading(it) }
         if (Nav.bpmSheet) BpmDialog()
     }
 }
@@ -154,6 +163,7 @@ private fun PhoneLayout(frame: Long) {
             val side: @Composable RowScope.() -> Unit = {
                 Column(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Stage(Modifier.weight(1f).fillMaxWidth(), frame)
+                    if (Session.mode == "libre") LibreBar(true)
                     MiniHud()
                     Box(Modifier.fillMaxWidth().height(150.dp), contentAlignment = if (ham) Alignment.CenterStart else Alignment.CenterEnd) { CutButton(frame) }
                 }
@@ -215,13 +225,16 @@ private fun Chips() {
 @Composable
 private fun Hud(land: Boolean) {
     @Composable fun K(label: String, v: String) = Column { Text(label.uppercase(), style = T.tiny.copy(letterSpacing = 0.7.sp)); Text(v, style = T.num.copy(fontSize = 17.sp)) }
+    val libre = Session.mode == "libre"
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-            K("Puntos", "${Session.hudPts}"); K("Combo", "×${Session.hudCombo}"); K("Precisión", if (Session.hudAcc < 0) "—" else "${Session.hudAcc}%")
+            if (libre) { K("Trucos", "${Session.hudTricks}"); K("Combo", if (Session.hudCombo >= 2) "×${Session.hudCombo}" else "—"); K("Clicks/s", "${Session.hudCps.roundToInt()}") }
+            else { K("Puntos", "${Session.hudPts}"); K("Combo", "×${Session.hudCombo}"); K("Precisión", if (Session.hudAcc < 0) "—" else "${Session.hudAcc}%") }
             if (land) Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) { Chips() } else Spacer(Modifier.weight(1f))
             Text(Session.hudState, style = if (Session.hudCount) T.num.copy(fontSize = 28.sp) else T.bodyB.copy(fontSize = 14.sp, color = C.accentText), maxLines = 1)
         }
         if (!land) { Spacer(Modifier.height(8.dp)); Row(Modifier.horizontalScroll(rememberScrollState())) { Chips() } }
+        if (libre) { Spacer(Modifier.height(8.dp)); LibreBar(false) }
     }
 }
 
@@ -230,7 +243,8 @@ private fun Hud(land: Boolean) {
 private fun MiniHud() {
     Row(Modifier.fillMaxWidth().height(34.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(Modifier.weight(1f).horizontalScroll(rememberScrollState())) { Chips() }
-        Text("${Session.hudPts} pts · ×${Session.hudCombo}" + if (Session.hudAcc >= 0) " · ${Session.hudAcc}%" else "", style = T.monoS, maxLines = 1)
+        Text(if (Session.mode == "libre") "${Session.hudTricks} trucos" + (if (Session.hudCombo >= 2) " · ×${Session.hudCombo}" else "") + " · ${Session.hudCps.roundToInt()} c/s"
+            else "${Session.hudPts} pts · ×${Session.hudCombo}" + if (Session.hudAcc >= 0) " · ${Session.hudAcc}%" else "", style = T.monoS, maxLines = 1)
         Text(Session.hudState, style = if (Session.hudCount) T.num.copy(fontSize = 18.sp) else T.small.copy(color = C.accentText), maxLines = 1)
     }
 }
@@ -259,13 +273,17 @@ private fun Stage(mod: Modifier, frame: Long) {
         if (strip > 0 && sound != null) drawScratchStrip(tm, sound.peaks, sound.cue, Inputs.p, open, (size.width * lead).toFloat(), strip, sound.name)
         val live = Session.running || Session.ended
         val beat = Store.curBeat()
+        val libre = Session.libre && Session.running
+        val b0 = now - span * lead; val b1 = now + span * (1 - lead)
         drawTtm(tm, TtmOpts(
-            now - span * lead, now + span * (1 - lead), now,
+            b0, b1, now,
             if (live) Session.timed else emptyList(), Session.samples, Session.flash, live,
             if (Store.set.waves && live && beat != null) beat.peaks else null,
-            if (beat != null) { b: Double -> beat.secAt(b) } else null,
+            if (beat != null) (if (libre) { b: Double -> Session.musical(b)?.let { beat.secAt(it) } } else { b: Double -> beat.secAt(b) }) else null,
             Session.guide, if (live) Session.tol().turnB else 0.0,
+            if (libre) Session.gridSegs else null,
         ), strip)
+        if (libre) drawNinja(tm, b0, b1, strip, Session.tricks, Session.ninja, Store.set.anim == "ninja")
     }
 }
 

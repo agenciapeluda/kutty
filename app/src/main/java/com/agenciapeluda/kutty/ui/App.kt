@@ -66,6 +66,7 @@ object Nav {
     var soundEditor by mutableStateOf<String?>(null)
     var trackEditor by mutableStateOf<String?>(null)
     var toast by mutableStateOf<String?>(null)
+    var libreEdit by mutableStateOf(false)
 }
 
 fun openPractice(t: Tech, mode: String, demo: Boolean = false) {
@@ -158,7 +159,7 @@ private fun HoyScreen() {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Scratch libre", style = T.bodyB)
-                    Text("Poné tu pista y scratcheá sin ejercicio: el gráfico muestra tu trazo", style = T.small.copy(color = C.text2))
+                    Text("Tu pista y tu sonido, sin ejercicio: la app reconoce tus trucos y al parar te da la lectura", style = T.small.copy(color = C.text2))
                 }
                 Text("›", style = T.h1.copy(fontSize = 22.sp, color = C.accentText))
             }
@@ -173,8 +174,21 @@ private fun HoyScreen() {
 
 @Composable
 private fun SessionRow(s: SessionRec) {
-    val t = Techniques.byId[s.id] ?: return
     val df = remember { SimpleDateFormat("d MMM", Locale("es", "AR")) }
+    if (s.libre) {
+        val x = remember(s.t) { s.extra?.let { runCatching { org.json.JSONObject(it) }.getOrNull() } }
+        Card(Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Scratch libre", style = T.bodyB, maxLines = 1)
+                    Text("${x?.optInt("n") ?: 0} trucos" + (x?.optInt("clean", -1)?.takeIf { it >= 0 }?.let { " · $it% cortes limpios" } ?: "") + " · ${df.format(s.t)}", style = T.small, maxLines = 1)
+                }
+                Text("${x?.optDouble("cps", 0.0) ?: 0.0} c/s", style = T.num.copy(fontSize = 15.sp, color = C.accentText))
+            }
+        }
+        return
+    }
+    val t = Techniques.byId[s.id] ?: return
     Card(Modifier.fillMaxWidth(), onClick = { Nav.detail = t }) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 11.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -300,7 +314,8 @@ private fun ProgresoScreen() {
     for (b in buckets) {
         val ss = Store.sessions.filter { keyFn(it.t) == b.key }
         b.min = ss.sumOf { it.dur } / 60.0; b.pts = ss.sumOf { it.pts }; b.n = ss.size
-        b.acc = if (ss.isEmpty()) null else ss.sumOf { it.acc } / ss.size
+        val graded = ss.filter { it.acc >= 0 }   // las sesiones libres no tienen puntaje
+        b.acc = if (graded.isEmpty()) null else graded.sumOf { it.acc } / graded.size
     }
     val maxMin = maxOf(1.0, buckets.maxOf { it.min })
     val accs = buckets.mapNotNull { it.acc }
@@ -351,6 +366,23 @@ private fun ProgresoScreen() {
             }
         }
         Text("Una técnica queda dominada con 85% o más en Practicar o Desafío.", style = T.tiny, modifier = Modifier.padding(top = 6.dp))
+        val libres = buckets.flatMap { b -> Store.sessions.filter { it.libre && keyFn(it.t) == b.key } }
+        if (libres.isNotEmpty()) {
+            val xs = libres.mapNotNull { it.extra?.let { e -> runCatching { org.json.JSONObject(e) }.getOrNull() } }
+            val cleans = xs.mapNotNull { x -> x.optInt("clean", -1).takeIf { it >= 0 } }
+            val tops = HashMap<String, Int>()
+            xs.forEach { x -> x.optJSONObject("tricks")?.let { o -> o.keys().forEach { k -> tops[k] = (tops[k] ?: 0) + o.getInt(k) } } }
+            H2("Scratch libre")
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Stat("Sesiones", "${libres.size}", "${libres.sumOf { it.dur } / 60} min", Modifier.weight(1f))
+                Stat("Trucos", "${xs.sumOf { it.optInt("n") }}", tops.maxByOrNull { it.value }?.let { "más: ${it.key}" }, Modifier.weight(1f))
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Stat("Cortes limpios", if (cleans.isEmpty()) "—" else "${cleans.sum() / cleans.size}%", modifier = Modifier.weight(1f))
+                Stat("Mejor combo", libres.maxOf { it.combo }.let { if (it >= 2) "×$it" else "—" }, modifier = Modifier.weight(1f))
+            }
+        }
     }
 }
 

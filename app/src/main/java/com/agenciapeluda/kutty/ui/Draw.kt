@@ -10,6 +10,7 @@ import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -20,6 +21,9 @@ import com.agenciapeluda.kutty.audio.REV
 import com.agenciapeluda.kutty.audio.UNIT
 import com.agenciapeluda.kutty.core.Curve
 import com.agenciapeluda.kutty.core.Flash
+import com.agenciapeluda.kutty.core.GridSeg
+import com.agenciapeluda.kutty.core.NinjaEv
+import com.agenciapeluda.kutty.core.Trick
 import com.agenciapeluda.kutty.core.Human
 import com.agenciapeluda.kutty.core.Samples
 import com.agenciapeluda.kutty.core.Tech
@@ -63,6 +67,8 @@ class TtmOpts(
     val flash: List<Flash>? = null, val grid: Boolean = true, val bg: Peaks? = null, val bgSec: ((Double) -> Double?)? = null,
     /** La guía (curva humana) y el ancho de la banda de tolerancia, en tiempos (0 = sin banda). */
     val guide: Curve? = null, val tolB: Double = 0.0,
+    /** Libre: la grilla sale del tiempo musical (cambia al pausar o mover el 1). */
+    val gridSegs: List<GridSeg>? = null,
 )
 
 /** Tramo de la curva como trazo continuo. */
@@ -112,13 +118,29 @@ fun DrawScope.drawTtm(tm: TextMeasurer, o: TtmOpts, top: Float = 0f) {
         }
     }
     // grilla
-    var b = ceil(o.b0)
     val label = TextStyle(fontFamily = Mono, fontSize = 10.sp, color = C.text2)
-    while (b <= o.b1) {
-        val x = X(b); val bar = ((b.toInt() % 4) + 4) % 4 == 0
-        drawLine(if (bar) C.tick else C.divider, Offset(x, top + padT - 6), Offset(x, top + H - padB + 4), 1f)
-        if (o.grid && bar && b >= 0 && x >= 0f && x + 24 * density < W) drawText(tm, (b.toInt() / 4 + 1).toString(), Offset(x + 4 * density, top + 3 * density), label)
-        b += 1.0
+    val gs = o.gridSegs
+    if (gs != null) {
+        for ((i, g) in gs.withIndex()) {
+            val xa = max(o.b0, g.x0); val xb = min(o.b1, gs.getOrNull(i + 1)?.x0 ?: o.b1)
+            if (xb <= xa) continue
+            if (!g.on) { drawRect(C.bg, Offset(X(xa), top + padT - 6), Size(X(xb) - X(xa), H - padT - padB + 10), alpha = 0.35f); continue }
+            var m = ceil(xa - g.shift)
+            while (m + g.shift <= xb) {
+                val x = X(m + g.shift); val mi = m.toInt(); val bar = ((mi % 4) + 4) % 4 == 0
+                drawLine(if (bar) C.tick else C.divider, Offset(x, top + padT - 6), Offset(x, top + H - padB + 4), 1f)
+                if (o.grid && bar && mi >= -4 && x >= 0f && x + 24 * density < W) drawText(tm, ((mi + 4) / 4 + 1).toString(), Offset(x + 4 * density, top + 3 * density), label)
+                m += 1.0
+            }
+        }
+    } else {
+        var b = ceil(o.b0)
+        while (b <= o.b1) {
+            val x = X(b); val bar = ((b.toInt() % 4) + 4) % 4 == 0
+            drawLine(if (bar) C.tick else C.divider, Offset(x, top + padT - 6), Offset(x, top + H - padB + 4), 1f)
+            if (o.grid && bar && b >= 0 && x >= 0f && x + 24 * density < W) drawText(tm, (b.toInt() / 4 + 1).toString(), Offset(x + 4 * density, top + 3 * density), label)
+            b += 1.0
+        }
     }
     for (p in listOf(0.0, 1.0)) drawLine(C.divider, Offset(0f, Y(p)), Offset(W, Y(p)), 1f, pathEffect = dashGrid)
     // referencia: la curva humana, con su banda de tolerancia tenue
@@ -300,6 +322,132 @@ fun DrawScope.drawTabIcon(kind: String, col: Color) {
             for (i in 0 until 8) {
                 val a = i * PI / 4; val r0 = 6.5f * k; val r1 = 9.5f * k
                 drawLine(col, Offset(center.x + (cos(a) * r0).toFloat(), center.y + (sin(a) * r0).toFloat()), Offset(center.x + (cos(a) * r1).toFloat(), center.y + (sin(a) * r1).toFloat()), 2 * density, StrokeCap.Round)
+            }
+        }
+    }
+}
+
+
+// ---------- Libre: ninja ----------
+
+/** Estrella ninja de cuatro puntas centrada en (0, 0). */
+private fun starPath(r: Float, crooked: Boolean): Path {
+    val p = Path()
+    val inner = r * 0.34f
+    for (k in 0 until 8) {
+        val a = (k * PI / 4).toFloat()
+        // torcida: las puntas desparejas
+        val rr = if (k % 2 == 0) (if (crooked && k % 4 == 2) r * 0.62f else r) else inner
+        val x = rr * cos(a); val y = rr * sin(a)
+        if (k == 0) p.moveTo(x, y) else p.lineTo(x, y)
+    }
+    p.close()
+    return p
+}
+
+/** Hoja: un tajo fino que se afina en las puntas, de a a b (hasta la fracción [head]). */
+private fun DrawScope.blade(a: Offset, b: Offset, w: Float, head: Float, color: Color, alpha: Float) {
+    val e = Offset(a.x + (b.x - a.x) * head, a.y + (b.y - a.y) * head)
+    val dx = e.x - a.x; val dy = e.y - a.y
+    val len = kotlin.math.sqrt(dx * dx + dy * dy)
+    if (len < 1f) return
+    val nx = -dy / len * w / 2; val ny = dx / len * w / 2
+    val m = Offset(a.x + dx * 0.55f, a.y + dy * 0.55f)
+    val p = Path().apply { moveTo(a.x, a.y); lineTo(m.x + nx, m.y + ny); lineTo(e.x, e.y); lineTo(m.x - nx * 0.4f, m.y - ny * 0.4f); close() }
+    drawPath(p, color, alpha = alpha)
+}
+
+/**
+ * Trucos reconocidos sobre el gráfico de Libre: el nombre queda marcado en el trazo y, en Ninja,
+ * el tajo (< 0,5 s), las estrellas de cada corte y los golpes de combo.
+ */
+fun DrawScope.drawNinja(tm: TextMeasurer, b0: Double, b1: Double, top: Float, tricks: List<Trick>, ev: List<NinjaEv>, ninja: Boolean) {
+    val W = size.width; val H = size.height - top
+    val padT = 22f * density; val padB = 18f * density; val ih = H - padT - padB
+    fun X(b: Double) = ((b - b0) / (b1 - b0) * W).toFloat()
+    fun Y(p: Double) = top + padT + (1 - ((p.coerceIn(-0.15, 1.2)) + 0.1) / 1.25).toFloat() * ih
+    val now = System.currentTimeMillis()
+    val markSt = TextStyle(fontFamily = Inter, fontWeight = FontWeight.SemiBold, fontSize = 10.sp, color = C.text2)
+    // marcas que quedan: una línea fina sobre el trazo y el nombre
+    var lastLabelEnd = -1f
+    for (k in tricks) {
+        if (k.x1 < b0 || k.x0 > b1) continue
+        val xa = X(k.x0); val xb = X(k.x1)
+        val ya = Y(k.pHi) - 4 * density; val yb = Y(k.pLo) + 4 * density
+        val fresh = ev.firstOrNull { it.kind == NinjaEv.TAJO && it.x0 == k.x0 }
+        val age = fresh?.let { now - it.at } ?: 10_000L
+        if (ninja) drawLine(C.text, Offset(xa, ya), Offset(xb, yb), 1f * density, alpha = 0.22f)
+        val label = fresh?.label ?: k.name
+        if (age > 450 || !ninja) {
+            val r = tm.measure(label, markSt)
+            val tx = xa.coerceIn(0f, max(0f, W - r.size.width))
+            if (tx > lastLabelEnd + 4 * density && tx + r.size.width <= W) {
+                drawText(r, topLeft = Offset(tx, (ya - r.size.height - 2 * density).coerceAtLeast(top + padT - 4 * density)), alpha = 0.85f)
+                lastLabelEnd = tx + r.size.width
+            }
+        }
+    }
+    if (!ninja) {
+        // sobrio: solo el combo, en texto
+        ev.lastOrNull { it.kind == NinjaEv.COMBO || it.kind == NinjaEv.FINAL }?.let { e ->
+            val age = (now - e.at) / 1200f
+            if (age < 1) {
+                val st = TextStyle(fontFamily = Mono, fontWeight = FontWeight.SemiBold, fontSize = 13.sp, color = C.accentText.copy(alpha = 1 - age))
+                val r = tm.measure(e.label.uppercase(), st)
+                drawText(r, topLeft = Offset(W - r.size.width - 10 * density, top + padT))
+            }
+        }
+        return
+    }
+    for (e in ev) {
+        val ageMs = now - e.at
+        when (e.kind) {
+            NinjaEv.TAJO -> {
+                if (ageMs > 450) continue
+                val t = ageMs / 450f
+                val xa = X(e.x0); val xb = X(e.x1)
+                val pad = (xb - xa) * 0.12f + 8 * density
+                val a = Offset(xa - pad, Y(e.p1) - 10 * density); val b = Offset(xb + pad, Y(e.p0) + 10 * density)
+                val head = (ageMs / 140f).coerceAtMost(1f)
+                val fade = if (ageMs < 140) 1f else 1f - (ageMs - 140) / 310f
+                blade(a, b, 7 * density, head, Color.White, 0.9f * fade)
+                blade(a, b, 3 * density, head, C.accentText, fade)
+                val st = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = Color.White)
+                val r = tm.measure(e.label, st)
+                val tx = xa.coerceIn(0f, max(0f, W - r.size.width))
+                val ty = (Y(e.p1) - r.size.height - 6 * density - t * 6 * density).coerceAtLeast(top + 2 * density)
+                if (tx + r.size.width <= W) drawText(r, topLeft = Offset(tx, ty), alpha = (1.3f - t).coerceIn(0f, 1f))
+            }
+            NinjaEv.STAR -> {
+                if (ageMs > 600) continue
+                val t = ageMs / 600f
+                val crooked = e.q == 1
+                val c = Offset(X(e.x0) + t * 34 * density, Y(e.p0) - t * (if (crooked) 10 else 26) * density + (if (crooked) t * t * 30 * density else 0f))
+                if (c.x < 0 || c.x > W) continue
+                rotate(t * (if (crooked) 260f else 720f) + (if (crooked) 25f else 0f), c) {
+                    translate(c.x, c.y) { drawPath(starPath(5.5f * density, crooked), if (crooked) C.cue else Color.White, alpha = 1 - t) }
+                }
+            }
+            NinjaEv.COMBO -> {
+                if (ageMs > 1200) continue
+                val t = ageMs / 1200f
+                val sc = if (ageMs < 120) 0.7f + ageMs / 400f else 1f
+                val st = TextStyle(fontFamily = Mono, fontWeight = FontWeight.SemiBold, fontSize = (13 * sc).sp, color = C.accentText)
+                val r = tm.measure(e.label.uppercase(), st)
+                drawText(r, topLeft = Offset(W - r.size.width - 10 * density, top + padT), alpha = 1 - t * t)
+            }
+            NinjaEv.FINAL -> {
+                if (ageMs > 750) continue
+                val t = ageMs / 750f
+                // golpe final: un tajo a todo el ancho y el combo grande
+                val head = (ageMs / 160f).coerceAtMost(1f)
+                val fade = if (ageMs < 160) 1f else 1f - (ageMs - 160) / 590f
+                blade(Offset(0f, top + padT + ih * 0.15f), Offset(W, top + padT + ih * 0.85f), 12 * density, head, Color.White, 0.85f * fade)
+                blade(Offset(0f, top + padT + ih * 0.15f), Offset(W, top + padT + ih * 0.85f), 5 * density, head, C.accent, fade)
+                val sc = 1.5f - 0.5f * (ageMs / 200f).coerceAtMost(1f)
+                val st = TextStyle(fontFamily = Inter, fontWeight = FontWeight.Bold, fontSize = (26 * sc).sp, color = Color.White, letterSpacing = 1.sp)
+                val r = tm.measure(e.label.uppercase() + "!", st)
+                drawText(r, topLeft = Offset((W - r.size.width) / 2, top + padT + (ih - r.size.height) / 2), alpha = (1.2f - t).coerceIn(0f, 1f))
             }
         }
     }

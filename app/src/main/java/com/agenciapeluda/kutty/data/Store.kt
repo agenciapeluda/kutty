@@ -19,7 +19,11 @@ import java.io.File
 data class SessionRec(
     val t: Long, val id: String, val mode: String, val bpm: Int, val acc: Int, val pts: Int, val dur: Int,
     val counts: IntArray, val combo: Int, val aborted: Boolean,
-)
+    /** Sesión libre: la lectura (trucos, clicks, cortes, grilla) en JSON. */
+    val extra: String? = null,
+) {
+    val libre get() = mode == "libre"
+}
 
 /** Ajustes: Compose los observa, así la interfaz se actualiza sola. */
 class Settings {
@@ -56,6 +60,7 @@ class Settings {
     var learnJog by mutableStateOf("")          // "status:data1" aprendido
     var learnFader by mutableStateOf("")
     var holdCuts by mutableStateOf(false)
+    var anim by mutableStateOf("ninja")          // animaciones de Libre: ninja | sobrio
     var phoneLayout by mutableStateOf("auto")   // pantalla de práctica: auto | siempre | nunca       // botón de corte del modo teléfono: mantener = corta
 
     fun toJson() = JSONObject().apply {
@@ -64,7 +69,7 @@ class Settings {
         put("cutIn", cutIn.toDouble()); put("hamster", hamster); put("diff", diff); put("demo", demo); put("bars", bars); put("waves", waves); put("calib", calib)
         put("discSrc", discSrc); put("faderSrc", faderSrc); put("dvsDevice", dvsDevice); put("outDevice", outDevice); put("keylock", keylock); put("progressive", progressive); put("progMax", progMax); put("progStep", progStep); put("dvsThreshold", dvsThreshold.toDouble())
         put("dvsInvert", dvsInvert); put("jogSteps", jogSteps); put("xfaderCutLag", xfaderCutLag.toDouble()); put("xfaderSide2", xfaderSide)
-        put("learnJog", learnJog); put("learnFader", learnFader); put("holdCuts", holdCuts); put("phoneLayout", phoneLayout)
+        put("learnJog", learnJog); put("learnFader", learnFader); put("holdCuts", holdCuts); put("phoneLayout", phoneLayout); put("anim", anim)
     }
     fun fromJson(o: JSONObject) {
         beat = o.optString("beat", beat); sound = o.optString("sound", sound)
@@ -76,7 +81,7 @@ class Settings {
         discSrc = o.optString("discSrc", discSrc); faderSrc = o.optString("faderSrc", faderSrc); dvsDevice = o.optInt("dvsDevice", dvsDevice); outDevice = o.optInt("outDevice", outDevice); keylock = o.optBoolean("keylock", keylock); progressive = o.optBoolean("progressive", progressive); progMax = o.optInt("progMax", progMax); progStep = o.optInt("progStep", progStep)
         dvsThreshold = o.optDouble("dvsThreshold", dvsThreshold.toDouble()).toFloat(); dvsInvert = o.optBoolean("dvsInvert", dvsInvert)
         jogSteps = o.optInt("jogSteps", jogSteps); xfaderCutLag = o.optDouble("xfaderCutLag", xfaderCutLag.toDouble()).toFloat()
-        xfaderSide = o.optString("xfaderSide2", xfaderSide); learnJog = o.optString("learnJog", learnJog); learnFader = o.optString("learnFader", learnFader); holdCuts = o.optBoolean("holdCuts", holdCuts); phoneLayout = o.optString("phoneLayout", phoneLayout)
+        xfaderSide = o.optString("xfaderSide2", xfaderSide); learnJog = o.optString("learnJog", learnJog); learnFader = o.optString("learnFader", learnFader); holdCuts = o.optBoolean("holdCuts", holdCuts); phoneLayout = o.optString("phoneLayout", phoneLayout); anim = o.optString("anim", anim)
     }
 }
 
@@ -88,6 +93,16 @@ object Store {
     val sounds = mutableStateMapOf<String, SoundItem>()
     val beats = mutableStateMapOf<String, BeatItem>()
     var audioReady by mutableStateOf(false)
+    /** Cues 1-4 de cada sonido (segundos; NaN = vacío). */
+    val cues = mutableStateMapOf<String, List<Double>>()
+    /** Cambios en los sonidos y pistas de fábrica (cue, fin, inicio, compases). */
+    private val builtinMeta = HashMap<String, JSONObject>()
+
+    fun cuesOf(key: String): List<Double> = cues[key] ?: List(4) { Double.NaN }
+    fun setCue(key: String, i: Int, sec: Double) {
+        cues[key] = cuesOf(key).toMutableList().also { it[i] = sec }
+        save()
+    }
 
     fun init(ctx: Context) {
         dir = ctx.filesDir
@@ -99,9 +114,11 @@ object Store {
                 for (i in 0 until a.length()) {
                     val s = a.getJSONObject(i); val c = s.getJSONArray("counts")
                     sessions.add(SessionRec(s.getLong("t"), s.getString("id"), s.getString("mode"), s.getInt("bpm"), s.getInt("acc"), s.getInt("pts"), s.getInt("dur"),
-                        IntArray(4) { c.getInt(it) }, s.optInt("combo"), s.optBoolean("aborted")))
+                        IntArray(4) { c.getInt(it) }, s.optInt("combo"), s.optBoolean("aborted"), s.optJSONObject("extra")?.toString()))
                 }
             }
+            o.optJSONObject("cues")?.let { cs -> cs.keys().forEach { k -> val a = cs.getJSONArray(k); cues[k] = List(4) { i -> if (i < a.length() && !a.isNull(i)) a.optDouble(i, Double.NaN) else Double.NaN } } }
+            o.optJSONObject("builtinMeta")?.let { bm -> bm.keys().forEach { builtinMeta[it] = bm.getJSONObject(it) } }
             o.optJSONObject("best")?.let { b -> b.keys().forEach { best[it] = b.getInt(it) } }
         }
     }
@@ -114,10 +131,13 @@ object Store {
                 put(JSONObject().apply {
                     put("t", s.t); put("id", s.id); put("mode", s.mode); put("bpm", s.bpm); put("acc", s.acc); put("pts", s.pts); put("dur", s.dur)
                     put("counts", JSONArray(s.counts.toList())); put("combo", s.combo); put("aborted", s.aborted)
+                    s.extra?.let { e -> runCatching { put("extra", JSONObject(e)) } }
                 })
             }
         })
         o.put("best", JSONObject().apply { best.forEach { (k, v) -> put(k, v) } })
+        o.put("cues", JSONObject().apply { cues.forEach { (k, v) -> put(k, JSONArray().apply { v.forEach { x -> if (x.isNaN()) put(JSONObject.NULL) else put(x) } }) } })
+        o.put("builtinMeta", JSONObject().apply { builtinMeta.forEach { (k, v) -> put(k, v) } })
         runCatching { val tmp = File(dir, "kutty.json.tmp"); tmp.writeText(o.toString()); tmp.renameTo(File(dir, "kutty.json")) }
     }
 
@@ -156,7 +176,23 @@ object Store {
                 b[key] = BeatItem(key, name, d, sr, m.getDouble("bpm"), m.getDouble("start"), m.getBoolean("loop"), m.getInt("bars"), AudioLib.peaks(d, 2, sr), false)
             }
         }
+        // lo que se cambió en los de fábrica
+        for ((k, m) in builtinMeta) {
+            s[k]?.let { it.cue = m.optDouble("cue", it.cue); it.end = m.optDouble("end", it.end).coerceAtMost(it.duration) }
+            b[k]?.let { it.start = m.optDouble("start", it.start); it.bars = m.optInt("bars", it.bars); it.loop = m.optBoolean("loop", it.loop) }
+        }
         sounds.putAll(s); beats.putAll(b)
+    }
+
+    /** Guarda cue/fin o inicio/compases, sea un audio subido o uno de fábrica. */
+    fun saveAudioMeta(key: String) {
+        val snd = sounds[key]; val bt = beats[key]
+        if (snd?.builtin == true || bt?.builtin == true) {
+            val m = JSONObject()
+            snd?.let { m.put("cue", it.cue).put("end", it.end) }
+            bt?.let { m.put("start", it.start).put("bars", it.bars).put("loop", it.loop) }
+            builtinMeta[key] = m; save()
+        } else saveMeta(key)
     }
 
     private fun readIndex(): JSONArray = runCatching { JSONArray(indexFile.readText()) }.getOrElse { JSONArray() }

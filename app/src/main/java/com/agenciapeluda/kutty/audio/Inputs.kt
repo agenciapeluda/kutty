@@ -104,6 +104,43 @@ object Inputs {
 
     fun cueSec() = Store.curSound()?.cue ?: 0.03
 
+    // motor del plato: arranca y frena con rampa, como un plato real (Start/Stop)
+    @Volatile var motorSpd = 0.0
+    private var lastTick = 0L
+    private const val MOTOR_UP = 0.35     // s de 0 a 33⅓
+    private const val MOTOR_DOWN = 0.5
+
+    /** Start/Stop del plato: prende o apaga el motor (el mismo ajuste de Disco en pantalla › Motor). */
+    fun toggleMotor() { Store.set.motor = !Store.set.motor; Store.save() }
+
+    // controles de la REV1 (los atiende la práctica; llegan en el hilo principal)
+    var onPlay: (() -> Unit)? = null
+    var onShiftPlay: (() -> Unit)? = null
+    var onPad: ((Int, Boolean) -> Unit)? = null
+    @Volatile var shiftHeld = false
+
+    /** Posición del disco en segundos de sonido. */
+    fun posSec() = cueSec() + p * UNIT
+
+    /** Salta a un punto del sonido (cue 1-4). Para atrás frena en el cue. */
+    @Synchronized fun jumpTo(sec: Double) {
+        if (autoDisc) return
+        val s = Store.curSound() ?: return
+        val x = sec.coerceIn(s.cue, s.end)
+        p = (x - s.cue) / UNIT
+        hClear(); if (touching) hPush(System.nanoTime(), p)
+        Engine.nJump(x)
+        send()
+    }
+
+    /** Cue i del sonido: si está, salta; con [store], lo guarda en la posición actual. */
+    fun hotCue(i: Int, store: Boolean) {
+        val s = Store.curSound() ?: return
+        if (store) { Store.setCue(s.key, i, posSec().coerceIn(s.cue, s.end)); return }
+        val c = Store.cuesOf(s.key).getOrNull(i) ?: return
+        if (!c.isNaN()) jumpTo(c)
+    }
+
     fun faderOpen(): Boolean {
         val s = Store.set
         if (autoFader) return autoFaderOpen
@@ -152,13 +189,18 @@ object Inputs {
         }
         val now = System.nanoTime()
         if (!demo) synchronized(this) {
+            val dt = (now - lastNs).coerceIn(0, 50_000_000) / 1e9
+            // la rampa del motor corre aunque tengas el disco agarrado (el plato sigue girando abajo)
+            val rdt = (now - lastTick).coerceIn(0, 50_000_000) / 1e9; lastTick = now
+            val want = if (Store.set.motor && discActive != "dvs") 1.0 else 0.0
+            val was = motorSpd
+            motorSpd = if (want > motorSpd) kotlin.math.min(want, motorSpd + rdt / MOTOR_UP) else kotlin.math.max(want, motorSpd - rdt / MOTOR_DOWN)
             if (autoDisc) { /* el disco lo mueve la app */ }
-            else if (Store.set.motor && !touching && discActive != "dvs") {
-                val dt = (now - lastNs).coerceIn(0, 50_000_000) / 1e9
-                p += dt / UNIT; vel = 1 / UNIT; lastNs = now; send(now)
-            }
+            else if (motorSpd > 0 && !touching && discActive != "dvs") {
+                p += dt * motorSpd / UNIT; vel = motorSpd / UNIT; lastNs = now; send(now)
+            } else if (was > 0 && motorSpd == 0.0 && !touching && discActive != "dvs") { vel = 0.0; lastNs = now; send(now) }
             if (lastJog != 0L && now - lastJog > 80_000_000) { lastJog = 0; touching = false; vel = 0.0; hClear(); send(now) }
-            if (!touching && !Store.set.motor) lastNs = now
+            if (!touching && motorSpd == 0.0) lastNs = now
         }
         resolve()
         if (!demo && discActive != "dvs") Engine.setFader(faderOpen())
@@ -267,6 +309,8 @@ object Inputs {
         hasXfader = rev1 || mix || (s.learnFader.isNotEmpty() && list.isNotEmpty())
     }
 
+    private val main = Handler(Looper.getMainLooper())
+
     private class Parser(val name: String) : MidiReceiver() {
         private var running = 0
         private val isRev1 = name.contains("REV1", true) || name.contains("DDJ", true)
@@ -314,6 +358,19 @@ object Inputs {
                     if (on) jogLeft = ch == 0 || ch == 2
                     lastJog = if (on) t else 0; touchDisc(on, t); return
                 }
+                // SHIFT (nota 0x3F), PLAY/PAUSE (0x0B; con SHIFT, 0x47) y pads en Hot Cue (canales 8-11: notas 0-7, con SHIFT 8-15)
+                if ((kind == 0x90 || kind == 0x80) && ch <= 3 && d1 == 0x3f) { shiftHeld = kind == 0x90 && d2 > 0; return }
+                if (kind == 0x90 && d2 > 0 && ch <= 3 && (d1 == 0x0b || d1 == 0x47)) {
+                    val sh = d1 == 0x47 || shiftHeld
+                    main.post { if (sh) onShiftPlay?.invoke() else onPlay?.invoke() }
+                    return
+                }
+                if ((kind == 0x90 || kind == 0x80) && ch <= 3 && (d1 == 0x0b || d1 == 0x47)) return
+                if (kind == 0x90 && ch in 7..10 && d1 < 16) {
+                    if (d2 > 0 && (d1 and 7) < 4) { val i = d1 and 7; val sh = d1 >= 8 || shiftHeld; main.post { onPad?.invoke(i, sh) } }
+                    return
+                }
+                if (kind == 0x80 && ch in 7..10 && d1 < 16) return
                 if (kind == 0xb0 && ch == 6 && d1 == 0x3f) { lsb = d2; return }
                 if (kind == 0xb0 && ch == 6 && d1 == 0x1f) { midiFader = ((d2 shl 7) or lsb) / 16383f; seenXfader(); Engine.setFader(faderOpen()); return }
             }

@@ -67,11 +67,11 @@ static inline float hermite(const float* d, int64_t n, double x) {
     return ((c3 * t + c2) * t + c1) * t + x0;
 }
 
-enum CmdType { C_START_BEAT, C_STOP_BEAT, C_RATE, C_CLICK, C_PREVIEW, C_STOP_PREVIEW, C_JUMP };
+enum CmdType { C_START_BEAT, C_STOP_BEAT, C_RATE, C_CLICK, C_PREVIEW, C_STOP_PREVIEW, C_JUMP, C_PAUSE_BEAT, C_RESUME_BEAT, C_START_BEAT_AT };
 struct Cmd {
     int type = 0;
     int64_t frame = 0;
-    double a = 0, b = 0, c = 0;
+    double a = 0, b = 0, c = 0, d = 0;
     int flag = 0;
 };
 
@@ -178,6 +178,10 @@ public:
     int64_t beatStartFrame = 0;
     double beatPos = 0, beatRate = 1, beatLoopStart = 0, beatLoopLen = 0;
     bool beatLoop = true;
+    // pausa del beat (Libre): se programa en un cuadro; al reanudar sigue desde donde quedó
+    bool beatPaused = false;
+    int64_t pauseAt = -1, resumeAt = -1;
+    float bFade = 1.f; int bFadeDir = 0;   // rampa de 6 ms al pausar y reanudar (sin click)
     // keylock: dos cabezas de lectura a velocidad 1 con ventanas de Hann al 50 %
     std::atomic<bool> keylock{false};
     double klStart[2] = {0, 0}; int64_t klAge[2] = {0, 0};
@@ -362,8 +366,8 @@ public:
             const Cmd c = cmds[cmdTail % CMDN];
             cmdTail++;
             switch (c.type) {
-                case C_START_BEAT: beatOn = true; beatStartFrame = c.frame; beatPos = c.a; beatRate = c.b; beatLoopLen = c.c; beatLoopStart = c.a; beatLoop = c.flag != 0; rates.clear(); klStart[0] = klStart[1] = c.a; klAge[0] = 0; klAge[1] = (int64_t)(0.03 * sr); break;
-                case C_STOP_BEAT: beatOn = false; rates.clear(); for (auto& k : clicks) k.active = false; break;
+                case C_START_BEAT: beatPaused = false; pauseAt = resumeAt = -1; bFade = 1.f; bFadeDir = 0; beatOn = true; beatStartFrame = c.frame; beatPos = c.a; beatRate = c.b; beatLoopLen = c.c; beatLoopStart = c.a; beatLoop = c.flag != 0; rates.clear(); klStart[0] = klStart[1] = c.a; klAge[0] = 0; klAge[1] = (int64_t)(0.03 * sr); break;
+                case C_STOP_BEAT: beatOn = false; beatPaused = false; pauseAt = resumeAt = -1; bFade = 1.f; bFadeDir = 0; rates.clear(); for (auto& k : clicks) k.active = false; break;
                 case C_RATE: if (rates.size() < 64) rates.push_back({c.frame, c.a}); break;
                 case C_CLICK: {
                     bool placed = false;
@@ -374,6 +378,9 @@ public:
                 case C_PREVIEW: pvOn = true; pvPos = c.a; pvEnd = c.a + c.b; break;
                 case C_STOP_PREVIEW: pvOn = false; break;
                 case C_JUMP: pos = c.a; dv = 0; break;
+                case C_START_BEAT_AT: beatPaused = false; pauseAt = resumeAt = -1; bFade = 0.f; bFadeDir = 1; beatOn = true; beatStartFrame = c.frame; beatPos = c.a; beatLoopStart = c.d; beatRate = c.b; beatLoopLen = c.c; beatLoop = c.flag != 0; rates.clear(); klStart[0] = klStart[1] = c.a; klAge[0] = 0; klAge[1] = (int64_t)(0.03 * sr); break;
+                case C_PAUSE_BEAT: pauseAt = c.frame; resumeAt = -1; break;
+                case C_RESUME_BEAT: resumeAt = c.frame; pauseAt = -1; break;
             }
         }
         (void)f0;
@@ -460,7 +467,17 @@ public:
             // cambio de velocidad programado (Desafío)
             for (size_t r = 0; r < rates.size(); r++) if (rates[r].frame <= f) { beatRate = rates[r].rate; rates.erase(rates.begin() + r); r--; }
             float bl = 0, br = 0;
-            if (beatOn && bt && f >= beatStartFrame) {
+            if (pauseAt >= 0 && f >= pauseAt) {
+                bFadeDir = -1; pauseAt = -1;
+                for (auto& k : clicks) if (k.active && k.frame >= f) k.active = false;
+            }
+            if (resumeAt >= 0 && f >= resumeAt) { beatPaused = false; bFadeDir = 1; resumeAt = -1; }
+            if (bFadeDir != 0) {
+                bFade += float(bFadeDir) / float(0.006 * sr);
+                if (bFade <= 0.f) { bFade = 0.f; bFadeDir = 0; beatPaused = true; }
+                else if (bFade >= 1.f) { bFade = 1.f; bFadeDir = 0; }
+            }
+            if (beatOn && bt && f >= beatStartFrame && !beatPaused) {
                 const int64_t len = bt->frames();
                 if (keylock.load(std::memory_order_relaxed) && std::fabs(beatRate - 1.0) > 0.002) {
                     const int64_t G = (int64_t)(0.06 * sr);
@@ -545,7 +562,7 @@ public:
                 if (++k.age > sr / 15) k.active = false;
             }
             const float m = s * sv + pv * sv + ck;
-            float L = bl * bv + m, R = br * bv + m;
+            float L = bl * bv * bFade + m, R = br * bv * bFade + m;
             // limitador suave: ataque instantáneo, relajación de 80 ms
             {
                 const float pk = std::max(std::fabs(L), std::fabs(R));
@@ -683,6 +700,11 @@ JNIEXPORT void JNICALL JF(nStartBeat)(JNIEnv*, jobject, jlong frame, jdouble sta
 }
 JNIEXPORT void JNICALL JF(nSetKeylock)(JNIEnv*, jobject, jboolean on) { if (E) E->keylock.store(on); }
 JNIEXPORT void JNICALL JF(nStopBeat)(JNIEnv*, jobject) { Cmd c; c.type = C_STOP_BEAT; E->push(c); }
+JNIEXPORT void JNICALL JF(nStartBeatAt)(JNIEnv*, jobject, jlong frame, jdouble posSec, jdouble loopStart, jdouble rate, jboolean loop, jdouble loopLen) {
+    Cmd c; c.type = C_START_BEAT_AT; c.frame = frame; c.a = posSec; c.d = loopStart; c.b = rate; c.c = loopLen; c.flag = loop ? 1 : 0; E->push(c);
+}
+JNIEXPORT void JNICALL JF(nPauseBeat)(JNIEnv*, jobject, jlong frame) { Cmd c; c.type = C_PAUSE_BEAT; c.frame = frame; E->push(c); }
+JNIEXPORT void JNICALL JF(nResumeBeat)(JNIEnv*, jobject, jlong frame) { Cmd c; c.type = C_RESUME_BEAT; c.frame = frame; E->push(c); }
 JNIEXPORT void JNICALL JF(nRate)(JNIEnv*, jobject, jlong frame, jdouble rate) { Cmd c; c.type = C_RATE; c.frame = frame; c.a = rate; E->push(c); }
 JNIEXPORT void JNICALL JF(nClick)(JNIEnv*, jobject, jlong frame, jboolean accent) { Cmd c; c.type = C_CLICK; c.frame = frame; c.flag = accent ? 1 : 0; E->push(c); }
 JNIEXPORT void JNICALL JF(nPreview)(JNIEnv*, jobject, jdouble start, jdouble dur) { Cmd c; c.type = C_PREVIEW; c.a = start; c.b = dur; E->push(c); }

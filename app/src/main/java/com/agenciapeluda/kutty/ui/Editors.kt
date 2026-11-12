@@ -156,7 +156,7 @@ const val UP = 2
 
 /** Onda con un arrastre que devuelve el segundo tocado y la fase (DOWN, MOVE, UP). */
 @Composable
-private fun WaveBox(pk: Peaks, s0: Double, s1: Double, height: Int, onSec: (Double, Int) -> Unit, over: androidx.compose.ui.graphics.drawscope.DrawScope.((Double) -> Float) -> Unit) {
+internal fun WaveBox(pk: Peaks, s0: Double, s1: Double, height: Int, onSec: (Double, Int) -> Unit, over: androidx.compose.ui.graphics.drawscope.DrawScope.((Double) -> Float) -> Unit) {
     Canvas(Modifier.fillMaxWidth().height(height.dp).clip(R12).background(C.dark).border(1.dp, C.divider, R12).pointerInput(s0, s1) {
         awaitEachGesture {
             val d = awaitFirstDown()
@@ -188,7 +188,7 @@ fun SoundEditor(key: String) {
     fun setEnd(v: Double) { end = v.coerceIn(min(s.duration, cue + 0.05), s.duration); s.end = end; if (isCur) Engine.nSetEnd(end) }
     fun setActive(v: Double) { if (active == "cue") setCue(v) else setEnd(v) }
     fun focus() { zoomCenter = if (active == "cue") cue else end }
-    fun done() { Engine.nStopPreview(); s.cue = cue; s.end = end; if (!s.builtin) Store.saveMeta(key); if (isCur) applySound(); Nav.soundEditor = null }
+    fun done() { Engine.nStopPreview(); s.cue = cue; s.end = end; Store.saveAudioMeta(key); if (isCur) applySound(); Nav.soundEditor = null }
     fun androidx.compose.ui.graphics.drawscope.DrawScope.trim(X: (Double) -> Float) {
         // lo de afuera apagado, la región resaltada
         val xc = X(cue).coerceIn(0f, size.width); val xe = X(end).coerceIn(0f, size.width)
@@ -244,7 +244,7 @@ fun TrackEditor(key: String) {
     val Z = 1.2
     fun sync() { b.start = start; b.bpm = bpm; b.loop = loop; b.bars = bars }
     fun stopPlay() { if (playing) { Engine.nStopBeat(); playing = false } }
-    fun done() { stopPlay(); sync(); if (!b.builtin) Store.saveMeta(key); Nav.trackEditor = null; selectAudio("beat", key) }
+    fun done() { stopPlay(); sync(); Store.saveAudioMeta(key); Nav.trackEditor = null; selectAudio("beat", key) }
     val spb = 60.0 / bpm
     val loopEnd = min(b.duration, start + bars * 4 * spb)
     fun androidx.compose.ui.graphics.drawscope.DrawScope.grid(X: (Double) -> Float, s0: Double, s1: Double, fine: Boolean) {

@@ -45,6 +45,11 @@ object Engine {
     external fun nSetVolumes(beat: Float, scratch: Float)
     external fun nStartBeat(frame: Long, startSec: Double, rate: Double, loop: Boolean, loopLen: Double)
     external fun nStopBeat()
+    /** Libre: pausa y reanuda el beat en un cuadro; al reanudar sigue desde donde quedó. */
+    external fun nPauseBeat(frame: Long)
+    /** Arranca el beat en posSec con el loop desde loopStart (Libre: mover el inicio sin cortar la pista). */
+    external fun nStartBeatAt(frame: Long, posSec: Double, loopStart: Double, rate: Double, loop: Boolean, loopLen: Double)
+    external fun nResumeBeat(frame: Long)
     external fun nRate(frame: Long, rate: Double)
     external fun nClick(frame: Long, accent: Boolean)
     external fun nPreview(start: Double, dur: Double)
