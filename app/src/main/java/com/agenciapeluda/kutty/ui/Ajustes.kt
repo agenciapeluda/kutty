@@ -159,8 +159,8 @@ fun AjustesScreen() {
                 Btn(if (Inputs.learning == "fader") "Mové el fader…" else if (s.learnFader.isNotEmpty()) "Fader aprendido" else "Aprender fader", kind = "ghost", small = true) { Inputs.learning = "fader" }
             }
         }
-        SRow("Lado del crossfader", "Hacia dónde está el deck del scratch") {
-            Seg(listOf("left" to "Izquierda", "right" to "Derecha"), s.xfaderSide) { s.xfaderSide = it; Store.save() }
+        SRow("Lado del crossfader", "Hacia dónde está el deck del scratch. En Auto sigue al jog que tocás en la REV1: deck izquierdo, abre a la izquierda") {
+            Seg(listOf("auto" to "Auto", "left" to "Izquierda", "right" to "Derecha"), s.xfaderSide) { s.xfaderSide = it; Store.save() }
         }
         SRow("Cut lag del crossfader", "Recorrido desde el borde antes de que suene") {
             KSlider(s.xfaderCutLag, 0f..0.2f, "${(s.xfaderCutLag * 100).roundToInt()}%") { s.xfaderCutLag = it }

@@ -73,6 +73,7 @@ object Inputs {
     @Volatile var fv = 0f            // posición del fader en pantalla 0..1
     @Volatile var padOpen = false
     @Volatile var midiFader = -1f    // crossfader MIDI 0..1 (-1: nunca llegó)
+    @Volatile var jogLeft = false    // el último jog que se tocó es de un deck izquierdo (1 o 3); sin jog, como antes (derecha)
     // práctica por partes: la app hace el fader (Solo plato) o el disco (Solo fader)
     @Volatile var autoFader = false
     @Volatile var autoDisc = false
@@ -110,7 +111,8 @@ object Inputs {
             "midi" -> {
                 val x = midiFader.coerceIn(0f, 1f)
                 val lag = s.xfaderCutLag
-                val v = if (s.xfaderSide == "left") 1f - x else x
+                val left = when (s.xfaderSide) { "left" -> true; "right" -> false; else -> jogLeft }
+                val v = if (left) 1f - x else x
                 val o = v > lag
                 if (s.hamster) !o else o
             }
@@ -298,20 +300,22 @@ object Inputs {
             val t = ts
             monitor(name, st, d1, d2)
             val ch = st and 0x0f
-            // DDJ de Pioneer (REV1): jog en CC 0x21/0x22 (0x23/0x29 con SHIFT) de los canales de deck,
-            // toque en la nota 0x36; crossfader 14 bits en CC 0x1F/0x3F del canal 7
+            // DDJ de Pioneer (REV1), como el mapeo de Cutlab: jog del plato en CC 0x22 (modo vinilo) / 0x23,
+            // borde en 0x21, centro en 64 (valor - 64); toque en la nota 0x36; crossfader 14 bits en
+            // CC 0x1F (MSB) / 0x3F (LSB) del canal 7. En los canales de deck, CC 0x1F es SHIFT + jog: se ignora.
             if (isRev1) {
-                if (kind == 0xb0 && ch <= 3 && (d1 == 0x21 || d1 == 0x22 || d1 == 0x23 || d1 == 0x29)) {
-                    // la codificación no está confirmada: se toma la que da el paso más chico
-                    val a = d2 - 64; val b = if (d2 >= 64) d2 - 128 else d2
-                    jog(if (kotlin.math.abs(a) <= kotlin.math.abs(b)) a else b, t); return
+                if (kind == 0xb0 && ch <= 3 && (d1 == 0x21 || d1 == 0x22 || d1 == 0x23)) {
+                    jogLeft = ch == 0 || ch == 2
+                    jog(d2 - 64, t); return
                 }
+                if (kind == 0xb0 && ch <= 3 && d1 == 0x1f) return
                 if ((kind == 0x90 || kind == 0x80) && ch <= 3 && d1 == 0x36) {
                     val on = kind == 0x90 && d2 > 0
+                    if (on) jogLeft = ch == 0 || ch == 2
                     lastJog = if (on) t else 0; touchDisc(on, t); return
                 }
-                if (kind == 0xb0 && d1 == 0x3f) { lsb = d2; return }
-                if (kind == 0xb0 && d1 == 0x1f) { midiFader = ((d2 shl 7) or lsb) / 16383f; seenXfader(); Engine.setFader(faderOpen()); return }
+                if (kind == 0xb0 && ch == 6 && d1 == 0x3f) { lsb = d2; return }
+                if (kind == 0xb0 && ch == 6 && d1 == 0x1f) { midiFader = ((d2 shl 7) or lsb) / 16383f; seenXfader(); Engine.setFader(faderOpen()); return }
             }
             if (isMixtour && st == 0xb0 && d1 == 0x08) { midiFader = d2 / 127f; Engine.setFader(faderOpen()); return }
             if (sig == s.learnJog) { val steps = if (kotlin.math.abs(d2 - 64) < 32) d2 - 64 else if (d2 < 64) d2 else d2 - 128; jog(steps, t); return }

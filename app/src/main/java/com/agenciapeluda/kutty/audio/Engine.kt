@@ -32,6 +32,10 @@ object Engine {
     /** Todos los puntos de una tanda (posición en segundos de sonido, tiempo real en ns). */
     fun pushPoints(ts: LongArray, pos: DoubleArray, n: Int, vel: Double) = synchronized(lock) { nPushPoints(ts, pos, n, vel) }
     external fun nSetEnd(end: Double)
+    /** Demo y mano automática: el motor toca la trayectoria programada (disco y/o fader) en vez de la del usuario. */
+    external fun nScript(disc: Boolean, fader: Boolean)
+    /** Puntos programados por cuadro de audio: posición en segundos de sonido y fader (1 abierto). */
+    external fun nPushScript(frames: LongArray, pos: DoubleArray, fader: ByteArray, n: Int)
     external fun nRecStart(seconds: Double): Int
     external fun nRecProgress(): Float
     external fun nRecFetch(out: FloatArray): Int

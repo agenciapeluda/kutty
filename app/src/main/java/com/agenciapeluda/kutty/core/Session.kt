@@ -164,7 +164,34 @@ object Session {
     }
 
     private fun releaseAuto() {
+        script(0.0, false, false)
         if (Inputs.autoFader || Inputs.autoDisc) { Inputs.autoFader = false; Inputs.autoDisc = false; Inputs.resolve(); Inputs.send() }
+    }
+
+    // trayectoria programada para el motor (1 punto por ms, 200 ms por delante)
+    private const val SCRIPT_STEP = 48L
+    private val spF = LongArray(512); private val spP = DoubleArray(512); private val spA = ByteArray(512)
+    private var scriptF = -1L
+    private var scriptOn = 0
+
+    private fun script(written: Double, disc: Boolean, fader: Boolean) {
+        val on = (if (disc) 1 else 0) or (if (fader) 2 else 0)
+        if (on == 0) {
+            if (scriptOn != 0) { scriptOn = 0; scriptF = -1; Engine.nScript(false, false); Inputs.send() }
+            return
+        }
+        val step = SCRIPT_STEP * sr.toLong() / 48000
+        var f = if (scriptF < 0) written.toLong() else scriptF + step
+        val until = written + 0.2 * sr
+        val cue = Inputs.cueSec()
+        var k = 0
+        while (f <= until && k < spF.size) {
+            val b = beatAt(f.toDouble())
+            spF[k] = f; spP[k] = cue + (if (b >= 0) perf.pos(b) else 0.0) * UNIT; spA[k] = (if (b >= 0) perf.fader(b) else 0).toByte()
+            scriptF = f; f += step; k++
+        }
+        if (k > 0) Engine.nPushScript(spF, spP, spA, k)
+        if (on != scriptOn) { scriptOn = on; Engine.nScript(disc, fader) }
     }
 
     /** Un cuadro de pantalla. */
@@ -209,24 +236,15 @@ object Session {
         val demoNow = cur?.demo == true
         if (demoNow) {
             if (!Inputs.demo) { Inputs.demo = true; Inputs.resolve() }
-            val r = Grading.refAt(perf, schedB)
-            val cue = Inputs.cueSec()
-            Engine.nSetTarget(cue + r.p * UNIT, r.v * UNIT * bpmAt(schedB) / 60)
-            Engine.setFader(r.f == 1)
-            Inputs.p = r.p
         } else if (Inputs.demo) {
-            Inputs.demo = false; Inputs.p = 0.0; Inputs.vel = 0.0; Inputs.resolve(); Inputs.send()
+            Inputs.demo = false; Inputs.p = 0.0; Inputs.vel = 0.0; Inputs.resolve()
         }
-        // por partes: la app hace la otra mano, perfecta
-        if (!demoNow && (Inputs.autoFader || Inputs.autoDisc)) {
-            val r = if (schedB >= 0) Grading.refAt(perf, schedB) else null
-            if (Inputs.autoFader) { val o = r?.f == 1; if (o != Inputs.autoFaderOpen) { Inputs.autoFaderOpen = o; Engine.setFader(o) } }
-            if (Inputs.autoDisc) {
-                val p = r?.p ?: 0.0
-                Engine.nSetTarget(Inputs.cueSec() + p * UNIT, (r?.v ?: 0.0) * UNIT * bpmAt(schedB) / 60)
-                Inputs.p = p
-            }
-        }
+        // demo y por partes: el motor toca la mano de la app programada por cuadro de audio
+        val scD = demoNow || Inputs.autoDisc
+        val scF = demoNow || Inputs.autoFader
+        script(written, scD, scF)
+        if (scD) Inputs.p = if (schedB >= 0) perf.pos(schedB) else 0.0
+        if (Inputs.autoFader && !demoNow) Inputs.autoFaderOpen = schedB >= 0 && perf.fader(schedB) == 1
         val heard = heardBeat
         val tol = tol(heard)
         val t = tech!!

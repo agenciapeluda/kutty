@@ -9,6 +9,7 @@
 //    fase de la portadora estéreo en cuadratura
 //  - captura posición y fader cada 32 cuadros para la puntuación
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <oboe/Oboe.h>
 #include <jni.h>
@@ -98,6 +99,29 @@ public:
     double gapEnv = 0.012;               // cuánto tarda en llegar el próximo dato (envolvente)
     std::atomic<double> needD{0.012};
     double Dsm = 0.012;
+
+    // reloj de audio: la hora del final de cada bloque, suavizada. Las placas USB (la REV1)
+    // piden bloques grandes y a destiempo; usar la hora cruda de cada llamada hacía saltar la
+    // trayectoria en cada bloque y pedir datos que todavía no llegaron (sonaba modulado).
+    int64_t clkT = 0, clkF = 0;
+    double clkErr = 0;
+
+    // demo y mano automática: trayectoria programada por cuadro de audio (sin pasar por la pantalla)
+    struct FPt { int64_t f; double p; uint8_t fa; };
+    static constexpr int FPN = 4096;
+    FPt fpts[FPN];
+    std::atomic<uint32_t> fpHead{0};
+    std::atomic<int> scriptDisc{0}, scriptFader{0};
+    void pushScript(const int64_t* fs, const double* ps, const int8_t* fa, int n) {
+        uint32_t h = fpHead.load(std::memory_order_relaxed);
+        int64_t newest = h ? fpts[(h - 1) % FPN].f : INT64_MIN;
+        for (int k = 0; k < n; k++) {
+            if (fs[k] <= newest) continue;
+            fpts[h % FPN] = {fs[k], ps[k], (uint8_t)(fa[k] ? 1 : 0)};
+            h++; newest = fs[k];
+        }
+        fpHead.store(h, std::memory_order_release);
+    }
     std::atomic<float> uiFader{0};
     std::atomic<int> discSource{0};   // 0 interfaz, 1 timecode
     std::atomic<int> faderSource{0};  // 0 interfaz, 1 corte del timecode
@@ -376,6 +400,29 @@ public:
         double tgt = 0, vel = 0; int64_t tm = tNow;
         const bool dvs = discSource.load() == 1;
         const double cueS = cue.load();
+        // reloj suavizado: hora del primer cuadro de este bloque
+        {
+            const int64_t fEnd = f0 + n;
+            if (clkT == 0) { clkT = tNow; clkF = fEnd; }
+            else {
+                const double pred = (double)clkT + (double)(fEnd - clkF) * 1e9 / sr;
+                const double err = (double)tNow - pred;
+                if (std::fabs(err) > 50e6) { clkT = tNow; clkErr = 0; }   // se cortó o se reabrió la salida
+                else { clkT = (int64_t)(pred + err * 0.02); clkErr = std::max(std::fabs(err), clkErr * 0.995); }
+                clkF = fEnd;
+            }
+        }
+        const int64_t tStart = clkT - (int64_t)((double)n * 1e9 / sr);
+        // trayectoria programada (demo / mano automática)
+        const bool scD = scriptDisc.load(std::memory_order_relaxed) != 0;
+        const bool scF = scriptFader.load(std::memory_order_relaxed) != 0;
+        static constexpr int FN = 512;
+        FPt fp[FN]; int fn = 0, fc = 0;
+        if (scD || scF) {
+            const uint32_t h = fpHead.load(std::memory_order_acquire);
+            const uint32_t m = h < (uint32_t)FN ? h : (uint32_t)FN;
+            for (uint32_t j = 0; j < m; j++) fp[fn++] = fpts[(h - m + j) % FPN];
+        }
         // copia de los últimos puntos para este bloque
         static constexpr int SN = 64;
         Pt sp[SN]; int sn = 0;
@@ -387,7 +434,7 @@ public:
             const uint32_t m = h < (uint32_t)SN ? h : (uint32_t)SN;
             for (uint32_t j = 0; j < m; j++) { const Pt& q = pts[(h - m + j) % PTN]; if (q.t >= floorT) sp[sn++] = q; }
             // el retardo se mueve despacio (si no, cambiaría la afinación)
-            const double want = needD.load(std::memory_order_relaxed);
+            const double want = needD.load(std::memory_order_relaxed) + clkErr / 1e9;
             const double maxStep = 0.005 * n / sr;   // como mucho 0,5 % de cambio de velocidad
             Dsm += std::max(-maxStep, std::min(maxStep, want - Dsm));
         }
@@ -440,13 +487,24 @@ public:
             }
             // el disco: un resorte críticamente amortiguado que sigue posición y velocidad
             double xt, vt;
-            if (dvs) {
+            // programado: posición y fader del cuadro exacto
+            float fo = fOpen;
+            if (fn > 0) {
+                while (fc + 1 < fn && fp[fc + 1].f <= f) fc++;
+                if (scF) fo = fp[fc].fa ? 1.f : 0.f;
+            }
+            if (scD && fn > 0) {
+                if (f <= fp[0].f) xt = fp[0].p;
+                else if (fc + 1 >= fn) xt = fp[fn - 1].p;
+                else { const FPt& a = fp[fc]; const FPt& b = fp[fc + 1]; xt = a.p + (b.p - a.p) * double(f - a.f) / double(b.f - a.f); }
+                vt = 0;
+            } else if (dvs) {
                 double dt = (double)(tNow - tm) / 1e9 + (double)i / sr;
                 if (dt < 0) dt = 0; if (dt > 0.03) dt = 0.03;
                 xt = tgt + vel * dt; vt = vel;
             } else if (sn == 0) { xt = pos; vt = 0; }
             else {
-                const int64_t qt = tNow + (int64_t)((double)i * 1e9 / sr) - Dns;
+                const int64_t qt = tStart + (int64_t)((double)i * 1e9 / sr) - Dns;
                 if (sn == 1 || qt <= sp[0].t) { const Pt& q = qt <= sp[0].t ? sp[0] : sp[sn - 1]; xt = q.p; vt = 0; }
                 else if (qt >= sp[sn - 1].t) {
                     // llegó tarde el dato: se sigue un poquito con la última velocidad y se frena
@@ -460,14 +518,14 @@ public:
                     xt = a.p + (b.p - a.p) * u; vt = 0;
                 }
             }
-            if (!dvs) vt = 0;   // táctil/jog: filtrado puro; DVS ya viene suave y conserva su velocidad
+            if (!dvs || scD) vt = 0;   // táctil/jog: filtrado puro; DVS ya viene suave y conserva su velocidad
             dv += (W2 * (xt - pos) + 2 * W * (vt - dv)) * dts;
             if (dv > 16) dv = 16; else if (dv < -16) dv = -16;
             pos += dv * dts;
             // para atrás frena en el cue
             if (pos < cueS) { pos = cueS; if (dv < 0) dv = 0; }
             spSm += (std::fabs(dv) - spSm) * kSp;
-            gain += (fOpen - gain) * ga;
+            gain += (fo - gain) * ga;
             float s = 0.f;
             if (smp) {
                 // pasado el fin, silencio (con 3 ms de rampa para que no haga click)
@@ -506,7 +564,7 @@ public:
             if (++capCount >= 32) {
                 capCount = 0;
                 uint64_t h = capHead.load(std::memory_order_relaxed);
-                capFrame[h % CAPN] = f; capPos[h % CAPN] = (float)pos; capF[h % CAPN] = fOpen > 0.5f ? 1 : 0;
+                capFrame[h % CAPN] = f; capPos[h % CAPN] = (float)pos; capF[h % CAPN] = fo > 0.5f ? 1 : 0;
                 capHead.store(h + 1, std::memory_order_release);
             }
         }
@@ -576,6 +634,23 @@ JNIEXPORT void JNICALL JF(nSetBeat)(JNIEnv* env, jobject, jfloatArray arr) {
 }
 JNIEXPORT void JNICALL JF(nSetTarget)(JNIEnv*, jobject, jdouble t, jdouble v) { E->setTarget(t, v); }
 JNIEXPORT void JNICALL JF(nSetTargetAt)(JNIEnv*, jobject, jdouble t, jdouble v, jlong tm) { E->setTarget(t, v, (int64_t)tm); }
+JNIEXPORT void JNICALL JF(nScript)(JNIEnv*, jobject, jboolean disc, jboolean fader) {
+    if (!E) return;
+    const bool was = E->scriptDisc.load() != 0;
+    E->scriptDisc.store(disc ? 1 : 0); E->scriptFader.store(fader ? 1 : 0);
+    // al soltar la demo, el disco del usuario arranca de cero (sin puntos viejos)
+    if (was && !disc) E->ptFloor.store(nowNs());
+}
+JNIEXPORT void JNICALL JF(nPushScript)(JNIEnv* env, jobject, jlongArray frames, jdoubleArray pos, jbyteArray fad, jint n) {
+    if (!E || n <= 0) return;
+    jlong* f = env->GetLongArrayElements(frames, nullptr);
+    jdouble* p = env->GetDoubleArrayElements(pos, nullptr);
+    jbyte* a = env->GetByteArrayElements(fad, nullptr);
+    E->pushScript((const int64_t*)f, (const double*)p, (const int8_t*)a, n);
+    env->ReleaseLongArrayElements(frames, f, JNI_ABORT);
+    env->ReleaseDoubleArrayElements(pos, p, JNI_ABORT);
+    env->ReleaseByteArrayElements(fad, a, JNI_ABORT);
+}
 JNIEXPORT void JNICALL JF(nSetEnd)(JNIEnv*, jobject, jdouble e) { E->endSec.store(e); }
 JNIEXPORT jint JNICALL JF(nRecStart)(JNIEnv*, jobject, jdouble seconds) {
     if (!E || E->recState.load() == 1) return 0;
