@@ -71,6 +71,7 @@ object Nav {
 
 fun openPractice(t: Tech, mode: String, demo: Boolean = false) {
     Session.open(t, mode)
+    Nav.libreEdit = false
     Nav.practice = true
     if (demo && Store.audioReady) Session.start(true)
 }

@@ -134,7 +134,7 @@ object Session {
 
     fun open(t: Tech, m: String) {
         stop(true)
-        tech = t; mode = m; ended = false; result = null
+        tech = t; mode = m; ended = false; result = null; libreRead = null
         val b = Store.curBeat()
         bpm = if (b != null && !b.builtin) b.bpm.roundToInt() else t.bpm
         timed = emptyList(); guide = Curve.EMPTY; perf = Curve.EMPTY; graded.clear(); samples.clear(); flash.clear()
